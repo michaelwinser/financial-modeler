@@ -1,0 +1,48 @@
+# docker-compose.yaml — run the published financial-modeler image on
+# any Docker host. Suitable for TrueNAS Scale's Custom App ("Install via
+# YAML") and any standalone Docker / Compose installation.
+#
+# Quick start (any docker host with Compose):
+#   docker compose up -d
+#   open http://localhost:8080/
+#
+# TrueNAS Scale:
+#   1. Apps → Discover Apps → Custom App
+#   2. "Install via YAML" — paste this file's contents (or upload it).
+#   3. Adjust the host port mapping if 8080 is taken on your box.
+#   4. Apply. The app pulls from ghcr.io and starts.
+#
+# Pinning the version: change `:latest` to a specific tag (e.g.
+# `:v1.0.0` or `:sha-abc1234`) for reproducible deploys. Available tags
+# are at:
+#   https://github.com/michaelwinser/financial-modeler/pkgs/container/financial-modeler
+#
+# Image visibility: GHCR packages are private by default. If you want
+# this compose file to work without `docker login`, mark the package
+# Public from the GitHub package settings page above.
+#
+# Environment overrides (optional — defaults work without them):
+#   IMAGE     — full image reference, e.g. ghcr.io/youruser/financial-modeler:v1.0.0
+#   HOST_PORT — host port to expose; default 8080
+#   TZ        — container timezone; default UTC
+
+services:
+  financial-modeler:
+    image: ${IMAGE:-ghcr.io/michaelwinser/financial-modeler:latest}
+    container_name: financial-modeler
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      TZ: ${TZ:-UTC}
+    # No volumes: the app is purely client-side; all user data lives in
+    # the browser's localStorage. The container is stateless and can be
+    # restarted, recreated, or scaled horizontally without data loss.
+    healthcheck:
+      # nginx:alpine ships BusyBox wget, so this works without installing
+      # extras into the image.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
