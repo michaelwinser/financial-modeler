@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# Claude Code personal settings (per-user permission allow-lists, etc.)
+# Shared settings, if any, would live in .claude/settings.json (commit).
+.claude/settings.local.json
