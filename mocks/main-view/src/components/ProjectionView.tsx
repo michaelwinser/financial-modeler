@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -61,7 +62,7 @@ interface DragState {
   initialEnd?: number;
 }
 
-export function ProjectionView(): JSX.Element {
+export function ProjectionView() {
   const projection = useProjection();
   const dollarMode = useStore((s) => s.dollarMode);
   const events = useAllEvents();
@@ -149,7 +150,7 @@ export function ProjectionView(): JSX.Element {
   const startDrag = (
     eventId: string,
     handle: 'start' | 'end' | 'whole',
-    e: React.PointerEvent,
+    e: ReactPointerEvent,
   ): void => {
     e.stopPropagation();
     e.preventDefault();
@@ -247,15 +248,17 @@ export function ProjectionView(): JSX.Element {
               borderRadius: 6,
               fontSize: 12,
             }}
-            formatter={(value: number, name: string) => {
+            formatter={(value, name) => {
               const labels: Record<string, string> = {
                 baseline: 'Baseline',
                 best: 'Best',
                 worst: 'Worst',
               };
-              return [fmtMoney(value), labels[name] ?? name];
+              const v = typeof value === 'number' ? value : Number(value);
+              const key = typeof name === 'string' ? name : String(name);
+              return [fmtMoney(v), labels[key] ?? key];
             }}
-            labelFormatter={(age: number) => `Age ${age}`}
+            labelFormatter={(label) => `Age ${label}`}
           />
           <Area
             type="monotone"

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { ReactNode } from 'react';
 import {
   Bar,
   BarChart,
@@ -40,7 +41,7 @@ interface Row {
   [key: string]: number;
 }
 
-export function CashFlowChart(): JSX.Element {
+export function CashFlowChart() {
   const projection = useProjection();
   const accounts = useStore((s) => s.accounts);
   const dollarMode = useStore((s) => s.dollarMode);
@@ -199,7 +200,7 @@ function CashFlowTooltip({
   projection,
   nameById,
   dollarMode,
-}: CashFlowTooltipProps): JSX.Element | null {
+}: CashFlowTooltipProps): ReactNode {
   if (!active || label === undefined) return null;
   const p = projection.find((x) => x.age === label);
   if (!p) return null;
@@ -292,7 +293,7 @@ interface LegendProps {
   nameById: Record<string, string>;
 }
 
-function Legend({ incomeIds, expenseIds, nameById }: LegendProps): JSX.Element {
+function Legend({ incomeIds, expenseIds, nameById }: LegendProps) {
   return (
     <div className="cashflow-legend">
       {incomeIds.map((id, idx) => (

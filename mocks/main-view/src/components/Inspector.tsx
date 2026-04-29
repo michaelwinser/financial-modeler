@@ -1,5 +1,6 @@
+import type { ReactNode } from 'react';
 import { useAllEvents, useStore } from '../store';
-import type { AccountNode, FieldValue, TimelineEvent } from '../types';
+import type { AccountNode, ActionTemplate, FieldValue, TimelineEvent } from '../types';
 
 const fmtPct = (v: number): string => `${(v * 100).toFixed(1)}%`;
 const fmtMoney = (v: number): string =>
@@ -38,7 +39,7 @@ function NumericField({
   max,
   step,
   onChange,
-}: NumericFieldProps): JSX.Element {
+}: NumericFieldProps) {
   const explicit = isExplicit(field);
   const fmt =
     format === 'pct'
@@ -132,7 +133,7 @@ function inheritedTypedYield(
   return undefined;
 }
 
-function AccountInspector({ node }: { node: AccountNode }): JSX.Element {
+function AccountInspector({ node }: { node: AccountNode }) {
   const accounts = useStore((s) => s.accounts);
   const setAccountField = useStore((s) => s.setAccountField);
   const removeAccount = useStore((s) => s.removeAccount);
@@ -349,7 +350,7 @@ function AccountInspector({ node }: { node: AccountNode }): JSX.Element {
   );
 }
 
-function EventInspector({ event }: { event: TimelineEvent }): JSX.Element {
+function EventInspector({ event }: { event: TimelineEvent }) {
   const accounts = useStore((s) => s.accounts);
   const setEventName = useStore((s) => s.setEventName);
   const setEventAge = useStore((s) => s.setEventAge);
@@ -506,7 +507,7 @@ function EventInspector({ event }: { event: TimelineEvent }): JSX.Element {
   );
 }
 
-function ActionsEditor({ event }: { event: TimelineEvent }): JSX.Element {
+function ActionsEditor({ event }: { event: TimelineEvent }) {
   const accounts = useStore((s) => s.accounts);
   const setActionField = useStore((s) => s.setActionField);
   const addAction = useStore((s) => s.addAction);
@@ -653,7 +654,7 @@ function ActionsEditor({ event }: { event: TimelineEvent }): JSX.Element {
   );
 }
 
-function ActorInspector(): JSX.Element {
+function ActorInspector() {
   const actor = useStore((s) => s.actor);
   const accounts = useStore((s) => s.accounts);
   const setActorField = useStore((s) => s.setActorField);
@@ -750,12 +751,12 @@ function ActorInspector(): JSX.Element {
   );
 }
 
-export function Inspector(): JSX.Element {
+export function Inspector() {
   const selection = useStore((s) => s.selection);
   const accounts = useStore((s) => s.accounts);
   const events = useAllEvents();
 
-  let body: JSX.Element;
+  let body: ReactNode;
   let title = 'Inspector';
 
   if (selection.kind === 'account') {

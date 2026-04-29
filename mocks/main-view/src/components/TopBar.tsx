@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import { exportScenarioJson, importScenarioJson, useStore } from '../store';
 
-export function TopBar(): JSX.Element {
+export function TopBar() {
   const dollarMode = useStore((s) => s.dollarMode);
   const toggle = useStore((s) => s.toggleDollarMode);
   const scenarioName = useStore((s) => s.actor.scenario_name);
@@ -40,7 +41,7 @@ export function TopBar(): JSX.Element {
     fileInputRef.current?.click();
   };
 
-  const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+  const onImportFile = async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;

@@ -20,7 +20,7 @@ const kindBadge: Record<AccountNode['kind'], { label: string; color: string }> =
 
 const kindOptions: AccountKind[] = ['asset', 'income', 'expense', 'ambient'];
 
-export function AccountsTree(): JSX.Element {
+export function AccountsTree() {
   const accounts = useStore((s) => s.accounts);
   const expanded = useStore((s) => s.expandedNodes);
   const toggleExpanded = useStore((s) => s.toggleExpanded);
@@ -32,7 +32,7 @@ export function AccountsTree(): JSX.Element {
   const childrenOf = (parentId: string | null): AccountNode[] =>
     accounts.filter((a) => a.parent_id === parentId);
 
-  const renderNode = (node: AccountNode, depth: number): JSX.Element => {
+  const renderNode = (node: AccountNode, depth: number) => {
     const kids = childrenOf(node.id);
     const hasKids = kids.length > 0;
     const isExpanded = expanded.has(node.id);

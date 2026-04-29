@@ -8,7 +8,7 @@ const fmtMoney = (v: number): string =>
     maximumFractionDigits: 0,
   });
 
-export function SummaryStrip(): JSX.Element {
+export function SummaryStrip() {
   const projection = useProjection();
   const dollarMode = useStore((s) => s.dollarMode);
   const actor = useStore((s) => s.actor);

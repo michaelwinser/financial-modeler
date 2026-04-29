@@ -7,7 +7,7 @@ import { Inspector } from './components/Inspector';
 import { SummaryStrip } from './components/SummaryStrip';
 import './styles.css';
 
-export default function App(): JSX.Element {
+export default function App() {
   return (
     <div className="app">
       <TopBar />

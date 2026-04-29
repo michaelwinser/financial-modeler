@@ -44,7 +44,7 @@ const actionOptions: Array<{
   { type: 'end_account', label: 'End stream', description: 'stop an income/expense at this age' },
 ];
 
-export function EventTimeline(): JSX.Element {
+export function EventTimeline() {
   const events = useAllEvents();
   const selection = useStore((s) => s.selection);
   const select = useStore((s) => s.select);

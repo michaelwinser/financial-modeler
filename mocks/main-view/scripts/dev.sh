@@ -1,34 +1,65 @@
 #!/usr/bin/env bash
-# Dev helpers for the financial-modeler mock.
-# Loads nvm, pins node 20.20.2 (mock requires node ≥ 20), runs a subcommand.
+# Dev helpers for the financial-modeler app.
+# Reads the pinned Node version from .nvmrc (project root) and loads it
+# via nvm (or another node version manager). Then runs a subcommand.
 #
 # Usage:
-#   ./scripts/dev.sh check       # tsc --noEmit (typecheck)
+#   ./scripts/dev.sh check       # typecheck (tsc --noEmit)
+#   ./scripts/dev.sh test        # run unit & integration tests once
 #   ./scripts/dev.sh verify      # ping dev server, report HTTP for key paths
 #   ./scripts/dev.sh tail        # tail recent vite log (best effort)
 #   ./scripts/dev.sh dev         # run vite dev server in foreground
-#   ./scripts/dev.sh install     # npm install (with the right node)
+#   ./scripts/dev.sh install     # npm ci (deterministic install from lockfile)
+#   ./scripts/dev.sh build       # production build
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$APP_DIR/../.." && pwd)"
 cd "$APP_DIR"
 
-# Load nvm; pin node 20.20.2.
-export NVM_DIR="$HOME/.nvm"
-# shellcheck disable=SC1091
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm use 20.20.2 >/dev/null 2>&1 || {
-  echo "nvm node 20.20.2 not installed; run: nvm install 20.20.2" >&2
+# Read the pinned Node version from .nvmrc (project root).
+NVMRC="$REPO_ROOT/.nvmrc"
+if [ ! -f "$NVMRC" ]; then
+  echo "missing $NVMRC — cannot determine Node version" >&2
   exit 1
-}
+fi
+NODE_VERSION="$(tr -d '[:space:]' < "$NVMRC")"
+
+# Try nvm first (most common). Fall back to a hint for other managers.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh"
+  nvm use "$NODE_VERSION" >/dev/null 2>&1 || {
+    echo "nvm: node $NODE_VERSION not installed; run: nvm install $NODE_VERSION" >&2
+    exit 1
+  }
+else
+  # Verify the active node matches what .nvmrc expects.
+  ACTIVE="$(node --version 2>/dev/null | sed 's/^v//')"
+  if [ "$ACTIVE" != "$NODE_VERSION" ]; then
+    echo "node $NODE_VERSION required (.nvmrc); active is ${ACTIVE:-none}." >&2
+    echo "install nvm (https://github.com/nvm-sh/nvm), or use fnm/asdf/volta and run 'use $NODE_VERSION' from $REPO_ROOT first." >&2
+    exit 1
+  fi
+fi
 
 cmd="${1:-check}"
+shift || true
 case "$cmd" in
   check)
-    npx tsc --noEmit
+    npm run typecheck --silent
     echo "tsc: clean"
+    ;;
+
+  test)
+    npm test --silent -- "$@"
+    ;;
+
+  build)
+    npm run build
     ;;
 
   verify)
@@ -73,11 +104,11 @@ case "$cmd" in
     ;;
 
   install)
-    npm install
+    npm ci
     ;;
 
   *)
-    echo "Usage: $0 {check|verify|tail|dev|install}" >&2
+    echo "Usage: $0 {check|test|build|verify|tail|dev|install} [args...]" >&2
     exit 2
     ;;
 esac

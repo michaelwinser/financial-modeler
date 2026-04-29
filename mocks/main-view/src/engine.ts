@@ -14,9 +14,6 @@ import type {
 
 type AccountMap = Map<string, AccountNode>;
 
-const buildMap = (accounts: AccountNode[]): AccountMap =>
-  new Map(accounts.map((a) => [a.id, a]));
-
 const parentChain = (map: AccountMap, id: string): AccountNode[] => {
   const chain: AccountNode[] = [];
   let cur: AccountNode | undefined = map.get(id);
