@@ -1,0 +1,42 @@
+# Files / directories excluded from the Docker build context.
+# Keeps the upload to the build daemon small and the layer cache stable.
+
+# Dependencies: installed fresh inside the build stage via npm ci.
+node_modules
+
+# Build outputs: produced inside the build stage.
+dist
+coverage
+
+# Source control / IDE / OS noise.
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Local env / secrets (none today, but defensive).
+.env
+.env.*
+*.local
+
+# Logs.
+*.log
+npm-debug.log*
+
+# Tests: not needed for the production bundle (Vite tree-shakes anyway,
+# but excluding from context speeds upload).
+**/*.test.ts
+**/*.test.tsx
+**/*.dom.test.ts
+**/*.dom.test.tsx
+src/test/
+
+# Dev script and its docs aren't part of the runtime image.
+scripts/
+docs/
+
+# Documentation files at the package root (Dockerfile itself, README,
+# vite/vitest config files are still needed for the build).
+README.md

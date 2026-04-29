@@ -46,3 +46,27 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    # Independent of the app job — same source produces the docker image,
+    # and a broken Dockerfile shouldn't be hidden by an unrelated test
+    # failure in the app job. Both run in parallel.
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push — validation only)
+        uses: docker/build-push-action@v6
+        with:
+          context: mocks/main-view
+          file: mocks/main-view/Dockerfile
+          push: false
+          load: true
+          tags: financial-modeler:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

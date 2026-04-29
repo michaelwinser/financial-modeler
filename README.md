@@ -91,7 +91,72 @@ A pure-function engine `project(accounts, actor, events) → YearlyProjection[]`
 
 ## CI
 
-[GitHub Actions workflow](.github/workflows/ci.yml) runs on every push and PR to `main`: install (with cache) → typecheck → lint → test → build. The CI Node version is read from `.nvmrc` so local and CI stay in lockstep.
+[GitHub Actions workflow](.github/workflows/ci.yml) runs on every push and PR to `main` with two parallel jobs:
+- **app**: install → typecheck → lint → test → build. Node version read from `.nvmrc` so local and CI stay in lockstep.
+- **docker**: builds the production image to validate the Dockerfile (no push).
+
+## Deployment
+
+The app is a static-asset SPA — no backend, no database. Once the user loads the page, no server interaction happens (their data lives entirely in their browser's `localStorage`). Deployment means *serving the built `dist/` directory*. The supplied [`mocks/main-view/Dockerfile`](mocks/main-view/Dockerfile) bakes that into a ~50 MB nginx-alpine image suitable for any container host.
+
+> **HTTPS is strongly recommended** even though no sensitive data is in flight: some browsers restrict `localStorage` on plain HTTP, and your testers will trust the URL more. Cloud Run gives HTTPS automatically. Self-hosted needs a reverse proxy with TLS.
+
+### Build and run the container locally
+
+```bash
+docker build -t financial-modeler mocks/main-view
+docker run --rm -p 8080:8080 financial-modeler
+# open http://localhost:8080
+```
+
+### Cloud Run
+
+Easiest target for "show friends a public URL": Cloud Run gives HTTPS, a public domain, and generous free tier (2M requests/month).
+
+```bash
+# One-time: create a project and enable the relevant APIs.
+gcloud projects create financial-modeler-demo
+gcloud config set project financial-modeler-demo
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com
+
+# Deploy. Cloud Build picks up the Dockerfile automatically.
+gcloud run deploy financial-modeler \
+  --source mocks/main-view \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --port 8080
+```
+
+`--allow-unauthenticated` makes the service public. Drop it (and use `gcloud run services add-iam-policy-binding` instead) if you want only signed-in Google accounts you've allowlisted to reach it.
+
+Subsequent deploys: same command. Cloud Run keeps prior revisions; rollback is `gcloud run services update-traffic`.
+
+### TrueNAS Scale (self-hosted)
+
+Two paths depending on whether your testers are inside your home network or beyond it.
+
+**Local network only.** TrueNAS Scale's *Apps* feature includes "Custom App" / "Launch Docker Image":
+
+1. Build and push the image to a registry your TrueNAS box can pull from (Docker Hub, GHCR, your own registry). Example with GHCR:
+
+   ```bash
+   docker build -t ghcr.io/<you>/financial-modeler:latest mocks/main-view
+   docker push ghcr.io/<you>/financial-modeler:latest
+   ```
+
+   Or run a quick local registry on your network and push there.
+
+2. In the TrueNAS UI: *Apps* → *Discover Apps* → *Custom App*. Image: your pushed tag. Container port: `8080`. Map to a host port (e.g. `8080`).
+
+3. Browse to `http://<truenas-ip>:8080/` from any device on the LAN.
+
+**Public access with HTTPS.** Add a reverse proxy with TLS in front of the container. The simplest path on TrueNAS Scale is the Caddy app (or the built-in *TrueCharts* / *cnpg* equivalents):
+
+- Install Caddy as another app; route `<your-domain>` → the financial-modeler container.
+- Caddy issues and renews Let's Encrypt certificates automatically.
+- Open ports 80 / 443 on your router; point your DNS at your home IP.
+
+If you don't have a static IP, a Tailscale or Cloudflare Tunnel between your TrueNAS box and a public endpoint sidesteps the port-forwarding question entirely.
 
 ## Privacy
 
