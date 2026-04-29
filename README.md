@@ -19,18 +19,36 @@ The mock-era [`docs/PRD.md`](docs/PRD.md) and [`docs/DESIGN.md`](docs/DESIGN.md)
 
 ## Prerequisites
 
-- **Node** matching [`.nvmrc`](./.nvmrc) (currently 20.20.2). `create-vite` requires Node ≥ 20.19; default macOS Node 18 will fail.
-- A node version manager that reads `.nvmrc`: [`nvm`](https://github.com/nvm-sh/nvm), [`fnm`](https://github.com/Schniz/fnm), [`asdf`](https://asdf-vm.com/), or [`volta`](https://volta.sh/) — any of these.
-- `bash` for the helper script (any modern shell will do).
+The **only** thing a typical developer needs to install separately is a Node version manager. Everything else is either universal (`git`, `bash`) or bootstrapped automatically from files in this repo.
+
+| Tool | Required? | How |
+|---|---|---|
+| **Node version manager** | Yes — install once | [`nvm`](https://github.com/nvm-sh/nvm), [`fnm`](https://github.com/Schniz/fnm), [`asdf`](https://asdf-vm.com/), or [`volta`](https://volta.sh/) — any of these |
+| **git** | Yes | Almost always already installed; `xcode-select --install` on macOS otherwise |
+| **bash** | Yes | macOS / Linux native; Git Bash or WSL on Windows |
+| **Node 20.20.2** | Bootstrapped | The version manager reads [`.nvmrc`](./.nvmrc) and installs/switches; no separate step |
+| **npm** | Bootstrapped | Bundled with Node |
+| **Vite, React, Vitest, Recharts, …** | Bootstrapped | `npm ci` installs from `package-lock.json` |
+
+`create-vite` requires Node ≥ 20.19; the default macOS Node 18 will fail. `dev.sh` will refuse to run if the active Node doesn't match `.nvmrc`, so version drift fails fast rather than silently.
+
+If you really don't want a version manager: install Node 20.20.2 directly (e.g. via Homebrew, official installer, or asdf without the `local` step). `dev.sh` will accept any matching version.
 
 ## Fresh-machine setup
 
 ```bash
+# 1. Install a node version manager (one-time, system-wide).
+#    macOS:
+brew install nvm
+#    Linux / Windows-WSL:
+#    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
+
+# 2. Clone and bootstrap.
 git clone <this repo>
 cd financial-modeler
 
-# Activate the pinned Node version. Use whichever manager you prefer.
-nvm use            # nvm
+nvm install        # installs 20.20.2 from .nvmrc if not present
+nvm use            # switches to it
 # OR: fnm use
 # OR: asdf install nodejs && asdf local nodejs $(cat .nvmrc)
 
