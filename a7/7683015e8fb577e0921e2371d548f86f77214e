@@ -1,0 +1,23 @@
+mocks/main-view/src/uc.test.tsx
+  bf3513e6ff782546 1-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "a77683015e8fb577e0921e2371d548f86f77214e",
+  "prompts": {
+    "bf3513e6ff782546": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab66ecec-cd22-4d2e-bc79-942637fa7049",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Michael Winser",
+      "messages": [],
+      "total_additions": 330,
+      "total_deletions": 27,
+      "accepted_lines": 4685,
+      "overriden_lines": 0
+    }
+  }
+}
