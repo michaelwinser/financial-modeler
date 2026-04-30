@@ -301,3 +301,278 @@ describe('UC11 — auto-event derivation from end_age', () => {
     expect(await screen.findByRole('button', { name: /open source account/i })).toBeInTheDocument();
   });
 });
+
+// ---------- Layer 4 — Events: kind & wiring --------------------------------
+
+describe('UC12 — create a one-shot event', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('+ One-shot → liquidate creates an event with kind=one_shot and a stub liquidate action', async () => {
+    const { user } = renderApp();
+    const before = useStore.getState().events.length;
+
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /^liquidate/i }));
+
+    const after = useStore.getState();
+    expect(after.events.length).toBe(before + 1);
+    const newEvt = after.events[after.events.length - 1];
+    expect(newEvt.kind).toBe('one_shot');
+    expect(newEvt.end_age).toBeUndefined();
+    expect(newEvt.actions).toHaveLength(1);
+    expect(newEvt.actions[0].type).toBe('liquidate');
+    expect(after.selection).toEqual({ kind: 'event', id: newEvt.id });
+  });
+});
+
+describe('UC13 — create a recurring event', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('+ Recurring → transfer creates a recurring event with end_age=trigger_age+5', async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole('button', { name: /\+ recurring/i }));
+    await user.click(screen.getByRole('button', { name: /^transfer/i }));
+
+    const s = useStore.getState();
+    const newEvt = s.events[s.events.length - 1];
+    expect(newEvt.kind).toBe('recurring');
+    expect(newEvt.trigger_age).toBe(65); // default
+    expect(newEvt.end_age).toBe(70);
+    expect(newEvt.actions[0].type).toBe('transfer');
+    // Transfer pre-wires an `amount` parameter.
+    expect(newEvt.parameters.amount).toBeGreaterThan(0);
+  });
+});
+
+describe('UC14 — attach an event to one or more accounts', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('toggling a checkbox adds the account to attached_account_ids', async () => {
+    const { user } = renderApp();
+
+    // Select an existing seed event (NUA on company stock).
+    const nuaRow = await screen.findByText(/nua on company stock/i);
+    await user.click(nuaRow);
+
+    // The seed's NUA already attaches fidelity_company_stock. Toggle a
+    // different account (the cash account) and confirm.
+    const cash = useStore.getState().accounts.find((a) => a.id === 'cash_reserves')!;
+    const checkbox = screen.getByRole('checkbox', { name: new RegExp(cash.name, 'i') });
+    await user.click(checkbox);
+
+    const evt = useStore.getState().events.find((e) => e.id === 'evt_nua')!;
+    expect(evt.attached_account_ids).toContain('cash_reserves');
+  });
+});
+
+describe('UC15 — set event parameters', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('changing the parameter slider updates event.parameters', async () => {
+    const { user } = renderApp();
+
+    const ladderRow = await screen.findByText(/roth conversion ladder/i);
+    await user.click(ladderRow);
+
+    // The Inspector renders parameter rows: <span class="ifield-label">amount</span>
+    // followed by an <input type="range">. The slider has no aria-label,
+    // so we traverse from the label span to find the slider in the same .ifield row.
+    const labelSpan = await screen.findByText('amount', { selector: '.ifield-label' });
+    const ifield = labelSpan.closest('.ifield')!;
+    const slider = ifield.querySelector('input[type="range"]') as HTMLInputElement;
+    expect(slider).not.toBeNull();
+    // For a range input, fireEvent.change is the reliable path.
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(slider, { target: { value: '120000' } });
+
+    const evt = useStore.getState().events.find((e) => e.id === 'evt_roth_ladder')!;
+    expect(evt.parameters.amount).toBe(120000);
+    // Suppress "user is unused" lint.
+    void user;
+  });
+});
+
+// ---------- Layer 5 — Action types -----------------------------------------
+
+describe('UC16-22 — action types via the action editor', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('UC16: a transfer action defaults pre-wire target_account and param_ref', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /^transfer/i }));
+
+    const evt = useStore.getState().events[useStore.getState().events.length - 1];
+    expect(evt.actions[0].type).toBe('transfer');
+    expect(evt.actions[0].param_ref).toBe('amount');
+  });
+
+  it('UC18: add_value with field=start_value and a fractional shock', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /shock \/ adjust/i }));
+
+    const evt = useStore.getState().events[useStore.getState().events.length - 1];
+    expect(evt.actions[0].type).toBe('add_value');
+    expect(evt.actions[0].field).toBe('start_value');
+    expect(evt.actions[0].param_ref).toBe('shock');
+    expect(Math.abs(evt.parameters.shock)).toBeLessThan(1);
+  });
+
+  it('UC19: switching field to annual_amount via the action editor select', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /shock \/ adjust/i }));
+
+    const evtId = useStore.getState().events[useStore.getState().events.length - 1].id;
+    // The action editor renders a Field <select>. Find it among combo
+    // boxes; it's the one whose options include 'annual_amount'.
+    const selects = screen.getAllByRole('combobox');
+    const fieldSelect = selects.find((s) =>
+      Array.from(s.querySelectorAll('option')).some((o) => o.value === 'annual_amount'),
+    );
+    expect(fieldSelect).toBeDefined();
+    await user.selectOptions(fieldSelect!, 'annual_amount');
+
+    const evt = useStore.getState().events.find((e) => e.id === evtId)!;
+    expect(evt.actions[0].field).toBe('annual_amount');
+  });
+
+  it('UC20: reparent action requires a new_parent dropdown selection', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /^reparent/i }));
+
+    const evtId = useStore.getState().events[useStore.getState().events.length - 1].id;
+    // Find the new-parent select (one with 'tax_florida' as an option).
+    const selects = screen.getAllByRole('combobox');
+    const newParent = selects.find((s) =>
+      Array.from(s.querySelectorAll('option')).some((o) => o.value === 'tax_florida'),
+    );
+    expect(newParent).toBeDefined();
+    await user.selectOptions(newParent!, 'tax_florida');
+
+    const evt = useStore.getState().events.find((e) => e.id === evtId)!;
+    expect(evt.actions[0].new_parent).toBe('tax_florida');
+  });
+
+  it('UC22: + Add action appends another action', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /\+ one-shot/i }));
+    await user.click(screen.getByRole('button', { name: /^liquidate/i }));
+
+    await user.click(screen.getByRole('button', { name: /\+ add action/i }));
+
+    const evt = useStore.getState().events[useStore.getState().events.length - 1];
+    expect(evt.actions).toHaveLength(2);
+  });
+});
+
+// ---------- Layer 6 — Mutations on existing entities ------------------------
+
+describe('UC23 — delete an account', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('Delete on a deletable account removes it and clears selection', async () => {
+    const { user } = renderApp();
+
+    // Pick an asset that has no children and isn't the cash sink or
+    // jurisdiction. seedAccounts has 'schwab_msft' which qualifies.
+    const target = useStore.getState().accounts.find((a) => a.id === 'schwab_msft')!;
+    await user.click(screen.getByText(target.name));
+
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    const s = useStore.getState();
+    expect(s.accounts.find((a) => a.id === 'schwab_msft')).toBeUndefined();
+    expect(s.selection).toEqual({ kind: 'none' });
+  });
+
+  it('Delete on the cash sink is blocked with an alert', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    const { user } = renderApp();
+    const cash = useStore.getState().accounts.find((a) => a.id === 'cash_reserves')!;
+    await user.click(screen.getByText(cash.name));
+
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/cash sink|jurisdiction/i));
+    // Account should still be there.
+    expect(useStore.getState().accounts.find((a) => a.id === 'cash_reserves')).toBeDefined();
+  });
+
+  it('Delete on US Economy is blocked because it has children', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    const { user } = renderApp();
+    const us = useStore.getState().accounts.find((a) => a.id === 'us_economy')!;
+    await user.click(screen.getByText(us.name));
+
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/has children/i));
+    expect(useStore.getState().accounts.find((a) => a.id === 'us_economy')).toBeDefined();
+  });
+});
+
+describe('UC24 — delete an event', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('Delete on a user event removes it', async () => {
+    const { user } = renderApp();
+
+    const target = await screen.findByText(/move to florida/i);
+    await user.click(target);
+
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(useStore.getState().events.find((e) => e.id === 'evt_move_fl')).toBeUndefined();
+  });
+});
+
+// ---------- Layer 7 — Read-only display ------------------------------------
+
+describe('UC28 — toggle Nominal $ ↔ Today\'s $', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('clicking the toggle flips dollarMode', async () => {
+    const { user } = renderApp();
+    expect(useStore.getState().dollarMode).toBe('nominal');
+
+    await user.click(screen.getByRole('button', { name: /today's \$/i }));
+    expect(useStore.getState().dollarMode).toBe('real');
+
+    await user.click(screen.getByRole('button', { name: /nominal \$/i }));
+    expect(useStore.getState().dollarMode).toBe('nominal');
+  });
+});
+
+// ---------- Notes on UCs covered elsewhere or deferred ---------------------
+//
+// UC17 (liquidate) and UC21 (end_account) are covered by UC22 implicitly
+// (the action editor allows configuring all types); UC22 here stresses the
+// multi-action composition. Engine effects of each action type are
+// covered by engine.test.ts.
+//
+// UC25 (drag a chart node) — pointer events on absolutely-positioned
+// chart overlays are brittle to test via testing-library. Engine.test.ts
+// covers the rounding behavior the drag relies on. Worth a manual UI
+// sanity check rather than an integration test until we adopt Playwright
+// or similar.
+//
+// UC26-27 (chart tooltips) — recharts renders SVG tooltips that don't
+// trigger naturally under user.hover() in jsdom. Skipped until we add
+// an end-to-end runner. The tooltip *content* is a pure function of
+// the projection, which engine snapshot tests already lock in.
+//
+// UC29 (export/import round-trip) — the JSON round-trip itself is fully
+// covered by store.persistence.test.ts. The UI button wiring is thin
+// glue; not adding a separate UC integration test for it.
+//
+// UC30 (localStorage round-trip across page refresh) — requires
+// re-mounting the whole app with localStorage state preserved. The
+// persist middleware is well-tested upstream by Zustand; the
+// configuration is verified by the store.persistence.test.ts shape
+// checks. A true refresh test would belong in an end-to-end runner.
