@@ -6,6 +6,7 @@
 # Usage:
 #   ./scripts/dev.sh check       # typecheck (tsc --noEmit)
 #   ./scripts/dev.sh test        # run unit & integration tests once
+#   ./scripts/dev.sh coverage    # run tests with v8 coverage
 #   ./scripts/dev.sh verify      # ping dev server, report HTTP for key paths
 #   ./scripts/dev.sh tail        # tail recent vite log (best effort)
 #   ./scripts/dev.sh dev         # run vite dev server in foreground
@@ -58,6 +59,10 @@ case "$cmd" in
     npm test --silent -- "$@"
     ;;
 
+  coverage)
+    npm run test:coverage --silent -- "$@"
+    ;;
+
   build)
     npm run build
     ;;
@@ -108,7 +113,7 @@ case "$cmd" in
     ;;
 
   *)
-    echo "Usage: $0 {check|test|build|verify|tail|dev|install} [args...]" >&2
+    echo "Usage: $0 {check|test|coverage|build|verify|tail|dev|install} [args...]" >&2
     exit 2
     ;;
 esac

@@ -61,7 +61,7 @@ That's it. State auto-persists to `localStorage` under the key `financial-modele
 
 ## Common commands
 
-All run from `mocks/main-view/` (or via `scripts/dev.sh` from anywhere):
+`npm` scripts work from **either the repo root or `mocks/main-view/`** — the root has pass-through scripts that delegate to the app. `scripts/dev.sh` is a thin wrapper that also handles the `nvm use` step.
 
 | What | npm | dev.sh |
 |---|---|---|
@@ -70,9 +70,9 @@ All run from `mocks/main-view/` (or via `scripts/dev.sh` from anywhere):
 | Lint | `npm run lint` | — |
 | Test once | `npm test` | `dev.sh test` |
 | Test watch | `npm run test:watch` | — |
-| Test with coverage | `npm run test:coverage` | — |
+| Test with coverage | `npm run test:coverage` | `dev.sh coverage` |
 | Production build | `npm run build` | `dev.sh build` |
-| Reproducible install | `npm ci` | `dev.sh install` |
+| Reproducible install | `npm run install:app` (root) or `npm ci` (in `mocks/main-view/`) | `dev.sh install` |
 
 `scripts/dev.sh` adds: `verify` (curls the dev server's key paths), `tail` (best-effort tail of a Claude-managed vite log).
 

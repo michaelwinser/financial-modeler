@@ -1,0 +1,19 @@
+{
+  "name": "financial-modeler-root",
+  "private": true,
+  "description": "Repo-root pass-throughs to the app at mocks/main-view. Run npm scripts from here OR cd into mocks/main-view; either works.",
+  "engines": {
+    "node": ">=20.19.0 <21"
+  },
+  "scripts": {
+    "dev": "cd mocks/main-view && npm run dev",
+    "build": "cd mocks/main-view && npm run build",
+    "preview": "cd mocks/main-view && npm run preview",
+    "lint": "cd mocks/main-view && npm run lint",
+    "typecheck": "cd mocks/main-view && npm run typecheck",
+    "test": "cd mocks/main-view && npm test",
+    "test:watch": "cd mocks/main-view && npm run test:watch",
+    "test:coverage": "cd mocks/main-view && npm run test:coverage",
+    "install:app": "cd mocks/main-view && npm ci"
+  }
+}
