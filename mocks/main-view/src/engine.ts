@@ -154,8 +154,16 @@ function applyAction(
   attachedId: string,
   action: ActionTemplate,
 ): ActionResult {
-  const acc = sim.accounts.get(attachedId);
   const r = emptyActionResult();
+
+  // Reparent acts on the actor (jurisdiction reference), not on an
+  // attached account, so it runs even when attachedId is empty.
+  if (action.type === 'reparent') {
+    if (action.new_parent) sim.jurisdiction_id = action.new_parent;
+    return r;
+  }
+
+  const acc = sim.accounts.get(attachedId);
   if (!acc) return r;
 
   if (action.type === 'end_account') {
@@ -220,9 +228,9 @@ function applyAction(
     acc.balance = 0;
     acc.basis = 0;
     acc.active = false;
-  } else if (action.type === 'reparent') {
-    if (action.new_parent) sim.jurisdiction_id = action.new_parent;
   }
+  // reparent is handled above the `if (!acc) return r` early return so
+  // that attached_account_ids === [] events still take effect.
   return r;
 }
 
