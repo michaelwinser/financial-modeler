@@ -2,12 +2,22 @@ import type {
   AccountNode,
   Actor,
   AssetClass,
+  BracketTable,
+  BracketTablesByStatus,
   FieldValue,
+  FilingStatus,
+  IrmaaTier,
+  IrmaaTiersByStatus,
   TimelineEvent,
   YearlyProjection,
   ActionTemplate,
 } from './types';
-import { resolveTaxTreatment } from './tax';
+import {
+  computeIrmaaSurcharge,
+  computeTax,
+  marginalRate,
+  resolveTaxTreatment,
+} from './tax';
 
 // =====================================================================
 // Tree resolution helpers
@@ -86,6 +96,159 @@ function jurisdictionTaxRate(
 }
 
 // =====================================================================
+// Bracket-aware tax context
+// =====================================================================
+//
+// Phase 3.0: bracket walking when jurisdiction tables are present, with a
+// single-bracket fallback synthesized from the legacy `effective_tax_rate`
+// when they aren't. Pre-3.0 fixtures and tests using only effective_tax_rate
+// continue to work; new scenarios (the seed) use real brackets.
+
+interface ResolvedTaxTables {
+  federalOrdinary: BracketTable;
+  federalLtcg: BracketTable;
+  stateOrdinary: BracketTable;
+  stateLtcg: BracketTable;
+  irmaa: IrmaaTier[];
+  // True if we found at least one real bracket table (not the synthetic
+  // fallback). Lets us decide whether IRMAA should fire (only meaningful
+  // with bracket math).
+  hasBrackets: boolean;
+}
+
+// Look up a per-filing-status field value walking the chain. Returns the
+// inner BracketTable for the active filing status, or undefined.
+function resolveBracketTable(
+  map: AccountMap,
+  fromId: string,
+  field: keyof AccountNode,
+  status: FilingStatus,
+): BracketTable | undefined {
+  // Walk up the chain leaf-to-root and return the first defined entry.
+  const chain = parentChain(map, fromId);
+  for (const node of chain) {
+    const v = node[field] as BracketTablesByStatus | undefined;
+    if (v && v[status]) return v[status];
+  }
+  return undefined;
+}
+
+function resolveIrmaaTiers(
+  map: AccountMap,
+  fromId: string,
+  status: FilingStatus,
+): IrmaaTier[] {
+  const chain = parentChain(map, fromId);
+  for (const node of chain) {
+    const v = node.irmaa_tiers as IrmaaTiersByStatus | undefined;
+    if (v && v[status]) return v[status]!;
+  }
+  return [];
+}
+
+function buildTaxTables(
+  map: AccountMap,
+  jurisdictionId: string,
+  filingStatus: FilingStatus,
+): ResolvedTaxTables {
+  const fedOrd = resolveBracketTable(map, jurisdictionId, 'federal_brackets_ordinary', filingStatus);
+  const fedLtcg = resolveBracketTable(map, jurisdictionId, 'federal_brackets_ltcg', filingStatus);
+  const stOrd = resolveBracketTable(map, jurisdictionId, 'state_brackets_ordinary', filingStatus);
+  const stLtcg = resolveBracketTable(map, jurisdictionId, 'state_brackets_ltcg', filingStatus);
+  const irmaa = resolveIrmaaTiers(map, jurisdictionId, filingStatus);
+
+  if (fedOrd) {
+    // Real brackets. State tables default to empty (no-tax states like FL).
+    return {
+      federalOrdinary: fedOrd,
+      federalLtcg: fedLtcg ?? [],
+      stateOrdinary: stOrd ?? [],
+      stateLtcg: stLtcg ?? [],
+      irmaa,
+      hasBrackets: true,
+    };
+  }
+  // Fallback for fixtures using the legacy effective_tax_rate field. We
+  // synthesize a single-bracket table at that flat rate so the year-end
+  // bracket-walk produces the same numbers the legacy code did. LTCG falls
+  // back to the 0.6× proxy.
+  const flat = jurisdictionTaxRate(map, jurisdictionId);
+  return {
+    federalOrdinary: [{ from: 0, rate: flat }],
+    federalLtcg: [{ from: 0, rate: flat * 0.6 }],
+    stateOrdinary: [],
+    stateLtcg: [],
+    irmaa: [],
+    hasBrackets: false,
+  };
+}
+
+// =====================================================================
+// Year accumulator — every taxable activity within a year goes here, and
+// year-end computes the tax bill in one shot via bracket walks.
+// =====================================================================
+
+interface YearAccumulator {
+  ordinary_income: number;       // salaries, SS (taxable portion ignored for V1), pensions, conversions, basis-portion of NUA, tax-deferred withdrawals
+  ltcg_income: number;           // taxable gains (less exclusions), NUA gain portion
+  tax_exempt_interest: number;   // muni bond interest — not taxed federally; reserved (V1: not yet computed)
+  deductible_expenses: number;   // expense streams flagged tax_deductible
+}
+
+function emptyYearAccumulator(): YearAccumulator {
+  return {
+    ordinary_income: 0,
+    ltcg_income: 0,
+    tax_exempt_interest: 0,
+    deductible_expenses: 0,
+  };
+}
+
+interface YearTax {
+  ordinary: number; // federal + state ordinary
+  ltcg: number;     // federal + state LTCG
+  irmaa: number;    // federal IRMAA premium surcharge
+  total: number;    // sum
+}
+
+function computeYearEndTax(
+  acc: YearAccumulator,
+  tables: ResolvedTaxTables,
+  age: number,
+): YearTax {
+  // Taxable ordinary income after deducting deductible expenses (V1: simple
+  // dollar-for-dollar reduction; doesn't model itemize-vs-standard).
+  const taxableOrdinary = Math.max(0, acc.ordinary_income - acc.deductible_expenses);
+  const fedOrd = computeTax(taxableOrdinary, tables.federalOrdinary);
+  const stOrd = computeTax(taxableOrdinary, tables.stateOrdinary);
+  // LTCG taxed in its own bracket schedule. Some states (CA) tax LTCG as
+  // ordinary; we use whatever state_brackets_ltcg specifies (CA mirrors).
+  const fedLtcg = computeTax(acc.ltcg_income, tables.federalLtcg);
+  const stLtcg = computeTax(acc.ltcg_income, tables.stateLtcg);
+  // IRMAA only applies on/after Medicare eligibility (65). Use MAGI proxy
+  // = ordinary + LTCG + tax-exempt interest. Real MAGI has subtleties we
+  // skip in V1.
+  let irmaa = 0;
+  if (age >= 65 && tables.irmaa.length > 0) {
+    const magi = acc.ordinary_income + acc.ltcg_income + acc.tax_exempt_interest;
+    irmaa = computeIrmaaSurcharge(magi, tables.irmaa);
+  }
+  const ordinary = fedOrd + stOrd;
+  const ltcg = fedLtcg + stLtcg;
+  return { ordinary, ltcg, irmaa, total: ordinary + ltcg + irmaa };
+}
+
+// Marginal rate for ordinary income at the current accumulator level —
+// federal + state combined. Used to gross up forced-sale withdrawals.
+function ordinaryMarginalRate(acc: YearAccumulator, tables: ResolvedTaxTables): number {
+  const taxable = Math.max(0, acc.ordinary_income - acc.deductible_expenses);
+  return (
+    marginalRate(taxable, tables.federalOrdinary) +
+    marginalRate(taxable, tables.stateOrdinary)
+  );
+}
+
+// =====================================================================
 // Mutable simulation state — a clone of the seed accounts plus runtime
 // fields like current balance, basis, and active flags.
 // =====================================================================
@@ -140,13 +303,11 @@ function paramValue(event: TimelineEvent, action: ActionTemplate): number {
 }
 
 interface ActionResult {
-  tax_ordinary: number;
-  tax_ltcg: number;
-  liquidationProceeds: number;
+  liquidationProceeds: number; // for the cash-flow chart's "event liquidation" bar
 }
 
 function emptyActionResult(): ActionResult {
-  return { tax_ordinary: 0, tax_ltcg: 0, liquidationProceeds: 0 };
+  return { liquidationProceeds: 0 };
 }
 
 function applyAction(
@@ -154,6 +315,7 @@ function applyAction(
   event: TimelineEvent,
   attachedId: string,
   action: ActionTemplate,
+  acc_tax: YearAccumulator,
 ): ActionResult {
   const r = emptyActionResult();
 
@@ -193,40 +355,36 @@ function applyAction(
     const amt = Math.min(paramValue(event, action), acc.balance);
     acc.balance -= amt;
     if (dst) dst.balance += amt;
-    // Tax-deferred → Roth conversion is fully ordinary income.
+    // Tax-deferred → Roth conversion: gross amount adds to ordinary income.
+    // Tax bill is computed at year-end via bracket walking.
     if (resolveTaxTreatment(acc.node) === 'tax_deferred') {
-      const rate = jurisdictionTaxRate(snapshotMap(sim), sim.jurisdiction_id);
-      const tax = amt * rate;
-      r.tax_ordinary += tax;
-      const cash = sim.accounts.get('cash_reserves');
-      if (cash) cash.balance -= tax;
+      acc_tax.ordinary_income += amt;
     }
   } else if (action.type === 'liquidate') {
-    const map = snapshotMap(sim);
-    const rate = jurisdictionTaxRate(map, sim.jurisdiction_id);
     const proceeds = acc.balance;
     const basis = acc.basis;
     const gain = Math.max(0, proceeds - basis);
     const tt = resolveTaxTreatment(acc.node);
-    let tax = 0;
     if (tt === 'tax_deferred') {
-      // NUA: basis at ordinary, gain at LTCG (0.6 × ordinary as proxy).
-      const ord = basis * rate;
-      const ltcg = gain * rate * 0.6;
-      r.tax_ordinary += ord;
-      r.tax_ltcg += ltcg;
-      tax = ord + ltcg;
+      // NUA: basis-portion is ordinary income, gain-portion is LTCG.
+      acc_tax.ordinary_income += basis;
+      acc_tax.ltcg_income += gain;
     } else if (tt === 'taxable' || tt === undefined) {
-      const exclusion = acc.node.asset_class === 'real_estate' ? 500000 : 0;
+      // Primary-residence sale gets the $500k MFJ / $250k single
+      // exclusion. V1: always use the MFJ figure (the seed actor is
+      // MFJ); refining to use actor.filing_status is small follow-up.
+      const exclusion = acc.node.account_type === 'primary_residence' ? 500_000
+        : acc.node.asset_class === 'real_estate' ? 500_000 // legacy
+        : 0;
       const taxableGain = Math.max(0, gain - exclusion);
-      const ltcg = taxableGain * rate * 0.6;
-      r.tax_ltcg += ltcg;
-      tax = ltcg;
+      acc_tax.ltcg_income += taxableGain;
     }
-    const net = proceeds - tax;
-    r.liquidationProceeds += net;
+    // tax_free → no tax contribution. Net proceeds = full balance, since
+    // tax for THIS year (including this liquidation's contribution) is
+    // settled at year end.
+    r.liquidationProceeds += proceeds;
     const cash = sim.accounts.get('cash_reserves');
-    if (cash) cash.balance += net;
+    if (cash) cash.balance += proceeds;
     acc.balance = 0;
     acc.basis = 0;
     acc.active = false;
@@ -236,14 +394,12 @@ function applyAction(
   return r;
 }
 
-function applyEvent(sim: SimState, event: TimelineEvent): ActionResult {
+function applyEvent(sim: SimState, event: TimelineEvent, acc_tax: YearAccumulator): ActionResult {
   const out = emptyActionResult();
   const ids = event.attached_account_ids.length > 0 ? event.attached_account_ids : [''];
   for (const id of ids) {
     for (const a of event.actions) {
-      const r = applyAction(sim, event, id, a);
-      out.tax_ordinary += r.tax_ordinary;
-      out.tax_ltcg += r.tax_ltcg;
+      const r = applyAction(sim, event, id, a, acc_tax);
       out.liquidationProceeds += r.liquidationProceeds;
     }
   }
@@ -263,23 +419,24 @@ function eventFires(event: TimelineEvent, age: number): boolean {
 interface FlowResult {
   income: number;
   expenses: number;
-  tax_ordinary: number;
-  tax_ltcg: number;
   income_by_source: Record<string, number>;
   expense_by_source: Record<string, number>;
-  forced_sale_proceeds: number;
 }
 
-function applyIncomeAndExpenses(sim: SimState, age: number): FlowResult {
+// Apply income and expense streams. Income flows gross to cash and adds to
+// the year's ordinary-income accumulator; expense flows gross out of cash
+// and (when tax_deductible) reduces ordinary income. Year-end will compute
+// the tax bill once.
+function applyIncomeAndExpenses(
+  sim: SimState,
+  age: number,
+  acc_tax: YearAccumulator,
+): FlowResult {
   let income = 0;
   let expenses = 0;
-  let tax_ordinary = 0;
-  let tax_ltcg = 0;
-  let forcedSaleProceeds = 0;
   const incomeBySource: Record<string, number> = {};
   const expenseBySource: Record<string, number> = {};
   const map = snapshotMap(sim);
-  const taxRate = jurisdictionTaxRate(map, sim.jurisdiction_id);
 
   for (const sa of sim.accounts.values()) {
     if (!sa.active) continue;
@@ -290,13 +447,11 @@ function applyIncomeAndExpenses(sim: SimState, age: number): FlowResult {
       const growth = resolveField(map, n.id, 'growth_rate') ?? 0;
       const yearsSinceStart = age - (n.start_age ?? age);
       const amount = (n.annual_amount ?? 0) * Math.pow(1 + growth, yearsSinceStart);
-      const tax = amount * taxRate;
-      const net = amount - tax;
       income += amount;
-      tax_ordinary += tax;
+      acc_tax.ordinary_income += amount;
       incomeBySource[n.id] = (incomeBySource[n.id] ?? 0) + amount;
       const cash = sim.accounts.get('cash_reserves');
-      if (cash) cash.balance += net;
+      if (cash) cash.balance += amount;
     } else if (n.kind === 'expense') {
       if (n.start_age !== undefined && age < n.start_age) continue;
       if (n.end_age !== undefined && age > n.end_age) continue;
@@ -305,53 +460,78 @@ function applyIncomeAndExpenses(sim: SimState, age: number): FlowResult {
       const amount = (n.annual_amount ?? 0) * Math.pow(1 + growth, yearsSinceStart);
       expenses += amount;
       expenseBySource[n.id] = (expenseBySource[n.id] ?? 0) + amount;
+      if (n.tax_deductible) acc_tax.deductible_expenses += amount;
       const cash = sim.accounts.get('cash_reserves');
       if (cash) cash.balance -= amount;
-    }
-  }
-
-  let cash = sim.accounts.get('cash_reserves');
-  if (cash && cash.balance < 0) {
-    let need = -cash.balance;
-    cash.balance = 0;
-    const order: Array<'taxable' | 'tax_deferred' | 'tax_free'> = [
-      'taxable',
-      'tax_deferred',
-      'tax_free',
-    ];
-    for (const treatment of order) {
-      if (need <= 0) break;
-      for (const sa of sim.accounts.values()) {
-        if (need <= 0) break;
-        if (sa.node.kind !== 'asset' || !sa.active) continue;
-        const tt = resolveTaxTreatment(sa.node) ?? inheritedTaxTreatment(map, sa.node.id);
-        if (tt !== treatment) continue;
-        if (sa.balance <= 0) continue;
-        const grossNeeded =
-          treatment === 'tax_deferred' ? need / (1 - taxRate) : need;
-        const take = Math.min(grossNeeded, sa.balance);
-        sa.balance -= take;
-        const net = treatment === 'tax_deferred' ? take * (1 - taxRate) : take;
-        if (treatment === 'tax_deferred') tax_ordinary += take - net;
-        if (treatment === 'taxable' && sa.basis > 0) {
-          const gainPortion = Math.max(0, 1 - sa.basis / (sa.balance + take));
-          const ltcg = take * gainPortion * taxRate * 0.6;
-          tax_ltcg += ltcg;
-        }
-        forcedSaleProceeds += net;
-        need -= net;
-      }
     }
   }
   return {
     income,
     expenses,
-    tax_ordinary,
-    tax_ltcg,
     income_by_source: incomeBySource,
     expense_by_source: expenseBySource,
-    forced_sale_proceeds: forcedSaleProceeds,
   };
+}
+
+// Cover negative cash by withdrawing from assets in tax-efficient order.
+// Updates acc_tax in place so the year-end recompute sees the additional
+// ordinary income from tax-deferred withdrawals (and LTCG from taxable
+// gain realizations). Returns the net dollars added back to cash.
+function applyForcedSales(
+  sim: SimState,
+  acc_tax: YearAccumulator,
+  tables: ResolvedTaxTables,
+): number {
+  const cash = sim.accounts.get('cash_reserves');
+  if (!cash || cash.balance >= 0) return 0;
+
+  let need = -cash.balance;
+  cash.balance = 0;
+  let totalNetProceeds = 0;
+  const map = snapshotMap(sim);
+  const order: Array<'taxable' | 'tax_deferred' | 'tax_free'> = [
+    'taxable',
+    'tax_deferred',
+    'tax_free',
+  ];
+  for (const treatment of order) {
+    if (need <= 0) break;
+    for (const sa of sim.accounts.values()) {
+      if (need <= 0) break;
+      if (sa.node.kind !== 'asset' || !sa.active) continue;
+      const tt = resolveTaxTreatment(sa.node) ?? inheritedTaxTreatment(map, sa.node.id);
+      if (tt !== treatment) continue;
+      if (sa.balance <= 0) continue;
+      // Bracket-aware gross-up for tax-deferred: take = need / (1 - marg).
+      // Approximate (single-bracket assumption); good enough for V1.
+      const margRate = treatment === 'tax_deferred' ? ordinaryMarginalRate(acc_tax, tables) : 0;
+      const grossNeeded = treatment === 'tax_deferred' ? need / Math.max(0.0001, 1 - margRate) : need;
+      const take = Math.min(grossNeeded, sa.balance);
+      sa.balance -= take;
+      let net: number;
+      if (treatment === 'tax_deferred') {
+        // Adds ordinary income; year-end recompute will produce the tax.
+        acc_tax.ordinary_income += take;
+        net = take * (1 - margRate);
+      } else if (treatment === 'taxable') {
+        // Realize a proportional slice of the gain.
+        if (sa.basis > 0 && sa.balance + take > 0) {
+          const gainPortion = Math.max(0, 1 - sa.basis / (sa.balance + take));
+          acc_tax.ltcg_income += take * gainPortion;
+        } else {
+          acc_tax.ltcg_income += take; // assume full gain when no basis recorded
+        }
+        net = take;
+      } else {
+        // tax_free withdrawal — no tax effect.
+        net = take;
+      }
+      cash.balance += net;
+      totalNetProceeds += net;
+      need -= net;
+    }
+  }
+  return totalNetProceeds;
 }
 
 function inheritedTaxTreatment(map: AccountMap, id: string): string | undefined {
@@ -429,21 +609,39 @@ export function project(
       const age = actor.current_age + yi;
       if (yi > 0) evolveInflation(sim);
 
+      const filingStatus: FilingStatus = actor.filing_status ?? 'single';
+      const acc_tax = emptyYearAccumulator();
+
       const triggered = events.filter((e) => eventFires(e, age));
       if (label === 'baseline') eventsPerYear[yi] = triggered;
-      let yearOrd = 0;
-      let yearLtcg = 0;
       let yearLiquidation = 0;
       for (const e of triggered) {
-        const r = applyEvent(sim, e);
-        yearOrd += r.tax_ordinary;
-        yearLtcg += r.tax_ltcg;
+        const r = applyEvent(sim, e, acc_tax);
         yearLiquidation += r.liquidationProceeds;
       }
 
-      const flow = applyIncomeAndExpenses(sim, age);
-      yearOrd += flow.tax_ordinary;
-      yearLtcg += flow.tax_ltcg;
+      const flow = applyIncomeAndExpenses(sim, age, acc_tax);
+
+      // Build tax tables AFTER events have fired — a reparent event may
+      // have switched the active jurisdiction (e.g., Move to Florida).
+      // Forced-sale uses the same tables.
+      const tables = buildTaxTables(snapshotMap(sim), sim.jurisdiction_id, filingStatus);
+
+      // Initial year-end tax based on income/event/conversion activity.
+      let yearTax = computeYearEndTax(acc_tax, tables, age);
+      const cash = sim.accounts.get('cash_reserves');
+      if (cash) cash.balance -= yearTax.total;
+
+      // Forced sales to cover any cash deficit. Tax-deferred withdrawals
+      // gross up via marginal-rate approximation and add to ordinary
+      // income. Recompute year-end tax to reflect that incremental
+      // ordinary income; deduct the delta. One pass usually suffices for
+      // single-bracket cases; bracket transitions may slightly under-pay.
+      const forcedSaleProceeds = applyForcedSales(sim, acc_tax, tables);
+      const yearTax2 = computeYearEndTax(acc_tax, tables, age);
+      const taxDelta = yearTax2.total - yearTax.total;
+      if (taxDelta !== 0 && cash) cash.balance -= taxDelta;
+      yearTax = yearTax2;
 
       growAssets(sim, shift);
 
@@ -451,14 +649,17 @@ export function project(
       series[label].push(portfolio);
 
       if (label === 'baseline') {
-        taxOrdinaryPerYear.push(yearOrd);
-        taxLtcgPerYear.push(yearLtcg);
+        // IRMAA is an income-based Medicare-premium surcharge, so we
+        // bucket it with ordinary tax for display in the cash-flow chart.
+        // The arithmetic of total taxes is unaffected.
+        taxOrdinaryPerYear.push(yearTax.ordinary + yearTax.irmaa);
+        taxLtcgPerYear.push(yearTax.ltcg);
         incomePerYear.push(flow.income);
         expensesPerYear.push(flow.expenses);
         incomeBySourcePerYear.push(flow.income_by_source);
         expenseBySourcePerYear.push(flow.expense_by_source);
         eventLiquidationPerYear.push(yearLiquidation);
-        forcedSalePerYear.push(flow.forced_sale_proceeds);
+        forcedSalePerYear.push(forcedSaleProceeds);
         const byAcc: Record<string, number> = {};
         for (const sa of sim.accounts.values())
           if (sa.node.kind === 'asset') byAcc[sa.node.id] = sa.balance;

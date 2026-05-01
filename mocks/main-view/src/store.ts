@@ -200,7 +200,7 @@ export const useStore = create<State>()(
   hoveredEventId: null,
   expandedNodes: new Set([
     'us_economy',
-    'tax',
+    'tax_federal',
     'personal',
     'schwab',
     'fidelity_401k',

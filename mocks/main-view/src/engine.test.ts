@@ -288,10 +288,12 @@ describe('engine action: liquidate', () => {
     })];
     const result = project(accounts, actor({ horizon_age: 60 }), events);
     // Gain = 1M - 200k = 800k. After 500k exclusion, taxable gain = 300k.
-    // LTCG = 300k × 30% × 0.6 (proxy) = 54k.
+    // LTCG (single-bracket fallback @ 30% × 0.6) = 300k × 0.18 = 54k.
+    // Post-3.0 refactor: event_liquidation_proceeds is GROSS (tax is at
+    // year-end, separate from per-event flows).
     expect(result[0].tax_ltcg).toBeCloseTo(54_000, 0);
     expect(result[0].tax_ordinary).toBe(0);
-    expect(result[0].event_liquidation_proceeds).toBeCloseTo(1_000_000 - 54_000, 0);
+    expect(result[0].event_liquidation_proceeds).toBeCloseTo(1_000_000, 0);
     expect(result[0].by_account['house']).toBe(0);
   });
 
@@ -311,10 +313,10 @@ describe('engine action: liquidate', () => {
       actions: [{ type: 'liquidate' }],
     })];
     const result = project(accounts, actor({ horizon_age: 60 }), events);
-    // Gain = 400k, no exclusion. LTCG = 400k × 30% × 0.6 = 72k.
+    // Gain = 400k, no exclusion. LTCG = 400k × 0.18 = 72k.
     expect(result[0].tax_ltcg).toBeCloseTo(72_000, 0);
     expect(result[0].tax_ordinary).toBe(0);
-    expect(result[0].event_liquidation_proceeds).toBeCloseTo(500_000 - 72_000, 0);
+    expect(result[0].event_liquidation_proceeds).toBeCloseTo(500_000, 0);
   });
 
   it('on a tax_deferred holding taxes basis at ordinary, gain at LTCG (NUA)', () => {
@@ -334,10 +336,11 @@ describe('engine action: liquidate', () => {
     })];
     const result = project(accounts, actor({ horizon_age: 60 }), events);
     // Basis 80k × 30% = 24k ordinary.
-    // Gain 320k × 30% × 0.6 = 57.6k LTCG.
+    // Gain 320k × 0.18 = 57.6k LTCG.
+    // event_liquidation_proceeds is gross (400k); tax is computed at year-end.
     expect(result[0].tax_ordinary).toBeCloseTo(24_000, 0);
     expect(result[0].tax_ltcg).toBeCloseTo(57_600, 0);
-    expect(result[0].event_liquidation_proceeds).toBeCloseTo(400_000 - 24_000 - 57_600, 0);
+    expect(result[0].event_liquidation_proceeds).toBeCloseTo(400_000, 0);
   });
 });
 

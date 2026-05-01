@@ -169,20 +169,135 @@ export const seedAccounts: AccountNode[] = [
     growth_rate: 0.05, // medical inflation
   },
 
-  // Tax jurisdictions live in their own subtree — actor references one.
+  // Tax jurisdictions form their own subtree. Federal Tax is the parent;
+  // states are children that inherit federal brackets and add state-level
+  // brackets of their own. The actor references the *state* node, and the
+  // engine walks up to find federal brackets.
+  //
+  // Numbers below are rounded approximations of 2025 IRS / state tables.
+  // They're shipped as defaults; users can edit per scenario.
+  {
+    id: 'tax_federal',
+    name: 'Federal Tax',
+    kind: 'ambient',
+    parent_id: null,
+    federal_brackets_ordinary: {
+      single: [
+        { from: 0, rate: 0.10 },
+        { from: 11_925, rate: 0.12 },
+        { from: 48_475, rate: 0.22 },
+        { from: 103_350, rate: 0.24 },
+        { from: 197_300, rate: 0.32 },
+        { from: 250_525, rate: 0.35 },
+        { from: 626_350, rate: 0.37 },
+      ],
+      mfj: [
+        { from: 0, rate: 0.10 },
+        { from: 23_850, rate: 0.12 },
+        { from: 96_950, rate: 0.22 },
+        { from: 206_700, rate: 0.24 },
+        { from: 394_600, rate: 0.32 },
+        { from: 501_050, rate: 0.35 },
+        { from: 751_600, rate: 0.37 },
+      ],
+    },
+    federal_brackets_ltcg: {
+      single: [
+        { from: 0, rate: 0.0 },
+        { from: 48_350, rate: 0.15 },
+        { from: 533_400, rate: 0.20 },
+      ],
+      mfj: [
+        { from: 0, rate: 0.0 },
+        { from: 96_700, rate: 0.15 },
+        { from: 600_050, rate: 0.20 },
+      ],
+    },
+    irmaa_tiers: {
+      // Approximate per-couple annual Medicare Part B + D surcharges by MAGI tier (MFJ).
+      mfj: [
+        { from: 0, surcharge_annual: 0 },
+        { from: 212_000, surcharge_annual: 1_872 },
+        { from: 266_000, surcharge_annual: 4_680 },
+        { from: 334_000, surcharge_annual: 7_488 },
+        { from: 400_000, surcharge_annual: 10_296 },
+        { from: 750_000, surcharge_annual: 13_104 },
+      ],
+      single: [
+        { from: 0, surcharge_annual: 0 },
+        { from: 106_000, surcharge_annual: 936 },
+        { from: 133_000, surcharge_annual: 2_340 },
+        { from: 167_000, surcharge_annual: 3_744 },
+        { from: 200_000, surcharge_annual: 5_148 },
+        { from: 500_000, surcharge_annual: 6_552 },
+      ],
+    },
+  },
   {
     id: 'tax_california',
     name: 'California (resident)',
     kind: 'ambient',
-    parent_id: null,
+    parent_id: 'tax_federal',
+    // Legacy fallback if anyone unsets the bracket tables.
     effective_tax_rate: 0.32,
+    // CA state ordinary brackets, simplified to the headline tiers (actual schedule has 9).
+    state_brackets_ordinary: {
+      single: [
+        { from: 0, rate: 0.01 },
+        { from: 10_756, rate: 0.02 },
+        { from: 25_499, rate: 0.04 },
+        { from: 40_245, rate: 0.06 },
+        { from: 55_866, rate: 0.08 },
+        { from: 70_606, rate: 0.093 },
+        { from: 360_659, rate: 0.103 },
+        { from: 432_787, rate: 0.113 },
+        { from: 721_314, rate: 0.123 },
+      ],
+      mfj: [
+        { from: 0, rate: 0.01 },
+        { from: 21_512, rate: 0.02 },
+        { from: 50_998, rate: 0.04 },
+        { from: 80_490, rate: 0.06 },
+        { from: 111_732, rate: 0.08 },
+        { from: 141_212, rate: 0.093 },
+        { from: 721_318, rate: 0.103 },
+        { from: 865_574, rate: 0.113 },
+        { from: 1_442_628, rate: 0.123 },
+      ],
+    },
+    // CA taxes LTCG as ordinary income — same brackets.
+    state_brackets_ltcg: {
+      single: [
+        { from: 0, rate: 0.01 },
+        { from: 10_756, rate: 0.02 },
+        { from: 25_499, rate: 0.04 },
+        { from: 40_245, rate: 0.06 },
+        { from: 55_866, rate: 0.08 },
+        { from: 70_606, rate: 0.093 },
+        { from: 360_659, rate: 0.103 },
+        { from: 432_787, rate: 0.113 },
+        { from: 721_314, rate: 0.123 },
+      ],
+      mfj: [
+        { from: 0, rate: 0.01 },
+        { from: 21_512, rate: 0.02 },
+        { from: 50_998, rate: 0.04 },
+        { from: 80_490, rate: 0.06 },
+        { from: 111_732, rate: 0.08 },
+        { from: 141_212, rate: 0.093 },
+        { from: 721_318, rate: 0.103 },
+        { from: 865_574, rate: 0.113 },
+        { from: 1_442_628, rate: 0.123 },
+      ],
+    },
   },
   {
     id: 'tax_florida',
     name: 'Florida',
     kind: 'ambient',
-    parent_id: null,
-    effective_tax_rate: 0.22,
+    parent_id: 'tax_federal',
+    // FL has no state income tax; state_brackets_* fields intentionally absent.
+    effective_tax_rate: 0.22, // legacy fallback; engine prefers brackets when present
   },
 ];
 
