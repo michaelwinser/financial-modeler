@@ -14,6 +14,35 @@ export type AccountKind =
 export type AssetClass = 'equity' | 'bond' | 'cash' | 'real_estate' | 'other';
 export type TaxTreatment = 'taxable' | 'tax_deferred' | 'tax_free';
 
+// Granular account taxonomy. Drives default tax_treatment, RMD eligibility,
+// and special handling (e.g., MFJ home-sale exclusion, muni-bond federal
+// exemption). Users can override the derived tax_treatment / subject_to_rmd
+// fields on a specific account if needed; this enum is the typical case.
+//
+// Mapping ⇒ derived defaults (see deriveTaxTreatment / deriveSubjectToRmd):
+//
+// taxable_brokerage    → taxable     · no RMD
+// traditional_401k     → tax_deferred · RMD at 73 (covers 401k/403b/457b/IRA/SEP/SIMPLE)
+// roth_account         → tax_free    · no RMD (Roth IRA + Roth 401k post-SECURE 2.0)
+// municipal_bond       → taxable     · no RMD · federal interest exempt
+// cash                 → taxable     · no RMD
+// pension              → (n/a; flow only — modeled as kind='income')
+// primary_residence    → taxable     · $500k MFJ home-sale exclusion
+// investment_property  → taxable     · no exclusion on sale
+export type AccountType =
+  | 'taxable_brokerage'
+  | 'traditional_401k'
+  | 'roth_account'
+  | 'municipal_bond'
+  | 'cash'
+  | 'pension'
+  | 'primary_residence'
+  | 'investment_property';
+
+// Filing status for tax-table selection. Phase 3.0 ships single + mfj;
+// 3.5 will add survivor (single after death-of-spouse) and possibly mfs.
+export type FilingStatus = 'single' | 'mfj';
+
 export interface Override {
   mode: 'absolute' | 'delta';
   value: number;
@@ -30,7 +59,9 @@ export interface AccountNode {
   parent_id: string | null;
   // Optional descriptive metadata
   asset_class?: AssetClass;
-  tax_treatment?: TaxTreatment;
+  account_type?: AccountType; // granular taxonomy; tax_treatment + subject_to_rmd derived from this
+  tax_treatment?: TaxTreatment; // override of derived default
+  subject_to_rmd?: boolean; // override of derived default (typical: true iff account_type='traditional_401k')
   custodian?: string; // tag for grouping (Schwab, Fidelity 401k, Vanguard, etc.)
   // Per-asset-class yields (lived on ambient parents like US Economy).
   // For asset accounts, an explicit yield_rate overrides the inherited
@@ -50,6 +81,7 @@ export interface AccountNode {
   end_age?: number;
   annual_amount?: number; // base amount at start_age (nominal)
   growth_rate?: FieldValue; // annual nominal growth applied to annual_amount
+  tax_deductible?: boolean; // expense streams only: reduces taxable income by their amount
 }
 
 // =====================================================================
@@ -96,6 +128,7 @@ export interface Actor {
   cash_account_id: string; // the sink for income/expenses/withdrawals
   jurisdiction_account_id: string; // currently-active jurisdiction node
   scenario_name: string;
+  filing_status?: FilingStatus; // default 'single'; bracket-walking selects the right table
 }
 
 // =====================================================================

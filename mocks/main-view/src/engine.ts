@@ -7,6 +7,7 @@ import type {
   YearlyProjection,
   ActionTemplate,
 } from './types';
+import { resolveTaxTreatment } from './tax';
 
 // =====================================================================
 // Tree resolution helpers
@@ -193,7 +194,7 @@ function applyAction(
     acc.balance -= amt;
     if (dst) dst.balance += amt;
     // Tax-deferred → Roth conversion is fully ordinary income.
-    if (acc.node.tax_treatment === 'tax_deferred') {
+    if (resolveTaxTreatment(acc.node) === 'tax_deferred') {
       const rate = jurisdictionTaxRate(snapshotMap(sim), sim.jurisdiction_id);
       const tax = amt * rate;
       r.tax_ordinary += tax;
@@ -206,15 +207,16 @@ function applyAction(
     const proceeds = acc.balance;
     const basis = acc.basis;
     const gain = Math.max(0, proceeds - basis);
+    const tt = resolveTaxTreatment(acc.node);
     let tax = 0;
-    if (acc.node.tax_treatment === 'tax_deferred') {
+    if (tt === 'tax_deferred') {
       // NUA: basis at ordinary, gain at LTCG (0.6 × ordinary as proxy).
       const ord = basis * rate;
       const ltcg = gain * rate * 0.6;
       r.tax_ordinary += ord;
       r.tax_ltcg += ltcg;
       tax = ord + ltcg;
-    } else if (acc.node.tax_treatment === 'taxable' || acc.node.tax_treatment === undefined) {
+    } else if (tt === 'taxable' || tt === undefined) {
       const exclusion = acc.node.asset_class === 'real_estate' ? 500000 : 0;
       const taxableGain = Math.max(0, gain - exclusion);
       const ltcg = taxableGain * rate * 0.6;
@@ -322,7 +324,7 @@ function applyIncomeAndExpenses(sim: SimState, age: number): FlowResult {
       for (const sa of sim.accounts.values()) {
         if (need <= 0) break;
         if (sa.node.kind !== 'asset' || !sa.active) continue;
-        const tt = sa.node.tax_treatment ?? inheritedTaxTreatment(map, sa.node.id);
+        const tt = resolveTaxTreatment(sa.node) ?? inheritedTaxTreatment(map, sa.node.id);
         if (tt !== treatment) continue;
         if (sa.balance <= 0) continue;
         const grossNeeded =
@@ -354,7 +356,10 @@ function applyIncomeAndExpenses(sim: SimState, age: number): FlowResult {
 
 function inheritedTaxTreatment(map: AccountMap, id: string): string | undefined {
   const chain = parentChain(map, id);
-  for (const n of chain) if (n.tax_treatment) return n.tax_treatment;
+  for (const n of chain) {
+    const tt = resolveTaxTreatment(n);
+    if (tt) return tt;
+  }
   return undefined;
 }
 
