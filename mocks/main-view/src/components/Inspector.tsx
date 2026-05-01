@@ -156,11 +156,11 @@ function AccountInspector({ node }: { node: AccountNode }) {
   const accounts = useStore((s) => s.accounts);
   const setAccountField = useStore((s) => s.setAccountField);
   const removeAccount = useStore((s) => s.removeAccount);
-  const actor = useStore((s) => s.actor);
-  const setActorField = useStore((s) => s.setActorField);
+  const household = useStore((s) => s.household);
+  const setHouseholdField = useStore((s) => s.setHouseholdField);
   const parent = accounts.find((a) => a.id === node.parent_id);
   const inheritedYield = inheritedTypedYield(accounts, node);
-  const isActiveJurisdiction = actor.jurisdiction_account_id === node.id;
+  const isActiveJurisdiction = household.jurisdiction_account_id === node.id;
   const isJurisdictionCandidate =
     node.kind === 'ambient' && node.effective_tax_rate !== undefined;
 
@@ -201,7 +201,7 @@ function AccountInspector({ node }: { node: AccountNode }) {
           ) : (
             <button
               className="add-btn"
-              onClick={() => setActorField('jurisdiction_account_id', node.id)}
+              onClick={() => setHouseholdField('jurisdiction_account_id', node.id)}
             >
               Set as active jurisdiction
             </button>
@@ -209,6 +209,55 @@ function AccountInspector({ node }: { node: AccountNode }) {
           <span className="muted small">
             Used for tax calculations on income, conversions, and withdrawals.
           </span>
+        </div>
+      )}
+
+      {household.actors.length > 1 &&
+        (node.kind === 'asset' || node.kind === 'income' || node.kind === 'expense' || node.kind === 'liability') && (
+        <div className="ifield">
+          <div className="ifield-row">
+            <span className="ifield-label">Owners</span>
+            <span className={`ifield-value ${node.owners ? 'explicit' : 'inherited'}`}>
+              {node.owners
+                ? node.owners
+                    .map((id) => household.actors.find((a) => a.id === id)?.name ?? id)
+                    .join(', ')
+                : `default (${household.actors.find((a) => a.id === household.primary_actor_id)?.name ?? 'primary'})`}
+            </span>
+          </div>
+          <div className="i-attach-list">
+            {household.actors.map((p) => {
+              const owners = node.owners ?? [household.primary_actor_id];
+              const checked = owners.includes(p.id);
+              return (
+                <label key={p.id} className={`attach-row ${checked ? 'on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      const next = checked
+                        ? owners.filter((o) => o !== p.id)
+                        : [...owners, p.id];
+                      // Empty → clear back to undefined (= default).
+                      setAccountField(
+                        node.id,
+                        'owners',
+                        next.length === 0 ? undefined : next,
+                      );
+                    }}
+                    aria-label={`${p.name} owner`}
+                  />
+                  <span className="attach-name">{p.name}</span>
+                  {!p.alive && <span className="attach-kind muted">deceased</span>}
+                </label>
+              );
+            })}
+          </div>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            For streams: drives whose age applies to start/end. For
+            tax-deferred assets: drives the RMD schedule. Multiple
+            checked = joint ownership (assets only).
+          </p>
         </div>
       )}
 
@@ -603,6 +652,7 @@ function EventInspector({ event }: { event: TimelineEvent }) {
 
 function ActionsEditor({ event }: { event: TimelineEvent }) {
   const accounts = useStore((s) => s.accounts);
+  const household = useStore((s) => s.household);
   const setActionField = useStore((s) => s.setActionField);
   const addAction = useStore((s) => s.addAction);
   const removeAction = useStore((s) => s.removeAction);
@@ -632,6 +682,7 @@ function ActionsEditor({ event }: { event: TimelineEvent }) {
               <option value="reparent">reparent</option>
               <option value="end_account">end_account</option>
               <option value="rmd">rmd</option>
+              <option value="death">death</option>
             </select>
             <button
               className="action-remove"
@@ -746,6 +797,32 @@ function ActionsEditor({ event }: { event: TimelineEvent }) {
                 for traditional 401(k)/IRA accounts; rarely added by hand.
               </p>
             )}
+            {a.type === 'death' && (
+              <>
+                <label>
+                  <span>Who dies?</span>
+                  <select
+                    value={a.actor_id ?? ''}
+                    onChange={(e) =>
+                      setActionField(event.id, i, { actor_id: e.target.value || undefined })
+                    }
+                    aria-label="Death actor"
+                  >
+                    <option value="">— pick —</option>
+                    {household.actors.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="action-hint muted small">
+                  Marks the actor inactive at trigger age. Surviving spouse
+                  inherits the decedent's assets (tax-free spousal rollover).
+                  Filing status flips MFJ → single from this age forward.
+                </p>
+              </>
+            )}
           </div>
         </div>
       ))}
@@ -757,18 +834,28 @@ function ActionsEditor({ event }: { event: TimelineEvent }) {
 }
 
 function ActorInspector() {
-  const actor = useStore((s) => s.actor);
+  const household = useStore((s) => s.household);
   const accounts = useStore((s) => s.accounts);
+  const setHouseholdField = useStore((s) => s.setHouseholdField);
   const setActorField = useStore((s) => s.setActorField);
+  const addActor = useStore((s) => s.addActor);
+  const removeActor = useStore((s) => s.removeActor);
+
+  const primary = household.actors.find((a) => a.id === household.primary_actor_id) ?? household.actors[0];
 
   const cashCandidates = accounts.filter(
-    (a) => a.kind === 'asset' && (a.asset_class === 'cash' || a.id === actor.cash_account_id),
+    (a) => a.kind === 'asset' && (a.asset_class === 'cash' || a.id === household.cash_account_id),
   );
   const jurisdictionCandidates = accounts.filter(
     (a) =>
       a.kind === 'ambient' &&
-      (a.effective_tax_rate !== undefined || a.id === actor.jurisdiction_account_id),
+      (a.effective_tax_rate !== undefined || a.id === household.jurisdiction_account_id),
   );
+
+  const onAddSpouse = (): void => {
+    addActor('Spouse', 60);
+    if (household.filing_status !== 'mfj') setHouseholdField('filing_status', 'mfj');
+  };
 
   return (
     <div className="inspector-body">
@@ -776,44 +863,89 @@ function ActorInspector() {
         <div className="i-kind">scenario</div>
         <input
           className="i-title"
-          value={actor.scenario_name}
-          onChange={(e) => setActorField('scenario_name', e.target.value)}
+          value={household.scenario_name}
+          onChange={(e) => setHouseholdField('scenario_name', e.target.value)}
         />
       </div>
-      <NumericField
-        label="Current age"
-        field={actor.current_age}
-        inheritedValue={undefined}
-        format="integer"
-        min={18}
-        max={110}
-        step={1}
-        onChange={(v) =>
-          setActorField('current_age', (v as number | undefined) ?? actor.current_age)
-        }
-      />
+      <div className="i-section-h">Household ({household.actors.length})</div>
+      {household.actors.map((p) => (
+        <div key={p.id} className="ifield">
+          <div className="ifield-row">
+            <span className="ifield-label">
+              {p.id === household.primary_actor_id ? 'Primary' : 'Spouse'}
+              {!p.alive && <span className="muted small"> · deceased</span>}
+            </span>
+            {p.id !== household.primary_actor_id && (
+              <button
+                className="i-delete"
+                onClick={() => {
+                  if (!confirm(`Remove ${p.name}?`)) return;
+                  const r = removeActor(p.id);
+                  if (!r.ok) alert(`Cannot remove: ${r.reason}`);
+                }}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <input
+            className="i-text"
+            type="text"
+            value={p.name}
+            onChange={(e) => setActorField(p.id, 'name', e.target.value)}
+            aria-label={`${p.id === household.primary_actor_id ? 'Primary' : 'Spouse'} name`}
+          />
+          <div className="ifield-controls">
+            <input
+              type="range"
+              min={18}
+              max={110}
+              step={1}
+              value={p.current_age}
+              onChange={(e) => setActorField(p.id, 'current_age', Number(e.target.value))}
+            />
+            <input
+              className="ifield-num"
+              type="number"
+              step={1}
+              value={p.current_age}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setActorField(p.id, 'current_age', n);
+              }}
+              aria-label={`${p.name} current age`}
+            />
+          </div>
+        </div>
+      ))}
+      {household.actors.length === 1 && (
+        <button className="add-btn full" onClick={onAddSpouse}>
+          + Add spouse
+        </button>
+      )}
+      <div className="i-section-h">Plan settings</div>
       <NumericField
         label="Horizon age"
-        field={actor.horizon_age}
+        field={household.horizon_age}
         inheritedValue={undefined}
         format="integer"
-        min={actor.current_age + 1}
+        min={primary.current_age + 1}
         max={130}
         step={1}
         onChange={(v) =>
-          setActorField('horizon_age', (v as number | undefined) ?? actor.horizon_age)
+          setHouseholdField('horizon_age', (v as number | undefined) ?? household.horizon_age)
         }
       />
       <div className="ifield">
         <div className="ifield-row">
           <span className="ifield-label">Filing status</span>
-          <span className="ifield-value explicit">{actor.filing_status ?? 'single'}</span>
+          <span className="ifield-value explicit">{household.filing_status ?? 'single'}</span>
         </div>
         <select
           className="i-select"
-          value={actor.filing_status ?? 'single'}
+          value={household.filing_status ?? 'single'}
           onChange={(e) =>
-            setActorField('filing_status', e.target.value as FilingStatus)
+            setHouseholdField('filing_status', e.target.value as FilingStatus)
           }
           aria-label="Filing status"
         >
@@ -822,7 +954,8 @@ function ActorInspector() {
         </select>
         <p className="muted small" style={{ marginTop: 4 }}>
           Selects which bracket table is used on the active jurisdiction's
-          federal/state schedules.
+          federal/state schedules. A death event flips MFJ → single
+          automatically from that age forward.
         </p>
       </div>
       <div className="ifield">
@@ -831,11 +964,11 @@ function ActorInspector() {
         </div>
         <select
           className="i-select"
-          value={actor.cash_account_id}
-          onChange={(e) => setActorField('cash_account_id', e.target.value)}
+          value={household.cash_account_id}
+          onChange={(e) => setHouseholdField('cash_account_id', e.target.value)}
         >
           {cashCandidates.length === 0 && (
-            <option value={actor.cash_account_id}>(missing — pick a cash account)</option>
+            <option value={household.cash_account_id}>(missing — pick a cash account)</option>
           )}
           {cashCandidates.map((a) => (
             <option key={a.id} value={a.id}>
@@ -850,11 +983,11 @@ function ActorInspector() {
         </div>
         <select
           className="i-select"
-          value={actor.jurisdiction_account_id}
-          onChange={(e) => setActorField('jurisdiction_account_id', e.target.value)}
+          value={household.jurisdiction_account_id}
+          onChange={(e) => setHouseholdField('jurisdiction_account_id', e.target.value)}
         >
           {jurisdictionCandidates.length === 0 && (
-            <option value={actor.jurisdiction_account_id}>
+            <option value={household.jurisdiction_account_id}>
               (no jurisdictions — create an ambient with effective_tax_rate)
             </option>
           )}

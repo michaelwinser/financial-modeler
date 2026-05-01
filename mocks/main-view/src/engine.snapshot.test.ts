@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { project } from './engine';
-import { seedAccounts, seedActor, seedEvents } from './seed';
+import { seedAccounts, seedHousehold, seedEvents } from './seed';
 import type { YearlyProjection } from './types';
 
 function digest(p: YearlyProjection[]) {
@@ -39,22 +39,22 @@ const sumTaxes = (p: YearlyProjection[]) => p.reduce((s, y) => s + y.taxes_paid,
 
 describe('engine: seed projection', () => {
   it('matches the integer-digest snapshot', () => {
-    const result = project(seedAccounts, seedActor, seedEvents);
+    const result = project(seedAccounts, seedHousehold, seedEvents);
     expect(digest(result)).toMatchSnapshot();
   });
 
   it('produces identical projections across repeated runs (determinism)', () => {
-    const a = project(seedAccounts, seedActor, seedEvents);
-    const b = project(seedAccounts, seedActor, seedEvents);
+    const a = project(seedAccounts, seedHousehold, seedEvents);
+    const b = project(seedAccounts, seedHousehold, seedEvents);
     expect(digest(a)).toEqual(digest(b));
   });
 
   it('headline numbers stay in sane ranges', () => {
-    const result = project(seedAccounts, seedActor, seedEvents);
+    const result = project(seedAccounts, seedHousehold, seedEvents);
     const start = result[0];
     const end = result[result.length - 1];
-    expect(start.age).toBe(seedActor.current_age);
-    expect(end.age).toBe(seedActor.horizon_age);
+    expect(start.age).toBe(seedHousehold.actors[0].current_age);
+    expect(end.age).toBe(seedHousehold.horizon_age);
     expect(start.cumulative_inflation_index).toBe(1);
     expect(end.cumulative_inflation_index).toBeGreaterThan(1);
     // The seed household starts with ~$5.9M; over a 33-year horizon
@@ -74,41 +74,41 @@ describe('engine: seed projection', () => {
 
 describe('engine: seed variants', () => {
   it('removing the FL move increases lifetime taxes (regression for the reparent fix)', () => {
-    const withMove = project(seedAccounts, seedActor, seedEvents);
+    const withMove = project(seedAccounts, seedHousehold, seedEvents);
     const noMove = project(
       seedAccounts,
-      seedActor,
+      seedHousehold,
       seedEvents.filter((e) => e.id !== 'evt_move_fl'),
     );
     expect(sumTaxes(noMove)).toBeGreaterThan(sumTaxes(withMove));
     // Year after the move (age 71): with-move tax should be lower
     // because the jurisdiction switch took effect.
-    const ageIdx = (a: number) => a - seedActor.current_age;
+    const ageIdx = (a: number) => a - seedHousehold.actors[0].current_age;
     expect(withMove[ageIdx(71)].taxes_paid).toBeLessThan(
       noMove[ageIdx(71)].taxes_paid,
     );
   });
 
   it('removing the Roth conversion ladder lowers in-conversion-year tax', () => {
-    const withLadder = project(seedAccounts, seedActor, seedEvents);
+    const withLadder = project(seedAccounts, seedHousehold, seedEvents);
     const noLadder = project(
       seedAccounts,
-      seedActor,
+      seedHousehold,
       seedEvents.filter((e) => e.id !== 'evt_roth_ladder'),
     );
     // During the ladder window (ages 65-72), with-ladder should pay
     // more in-year tax than no-ladder. Pick a year inside the window.
-    const ageIdx = (a: number) => a - seedActor.current_age;
+    const ageIdx = (a: number) => a - seedHousehold.actors[0].current_age;
     expect(withLadder[ageIdx(67)].taxes_paid).toBeGreaterThan(
       noLadder[ageIdx(67)].taxes_paid,
     );
   });
 
   it('removing the market downturn raises terminal net worth', () => {
-    const withDip = project(seedAccounts, seedActor, seedEvents);
+    const withDip = project(seedAccounts, seedHousehold, seedEvents);
     const noDip = project(
       seedAccounts,
-      seedActor,
+      seedHousehold,
       seedEvents.filter((e) => e.id !== 'evt_market_dip'),
     );
     const lastWith = withDip[withDip.length - 1].total_baseline;

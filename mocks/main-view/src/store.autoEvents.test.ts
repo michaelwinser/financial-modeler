@@ -5,16 +5,22 @@
 
 import { describe, expect, it } from 'vitest';
 import { synthesizeAutoEvents } from './store';
-import type { AccountNode, Actor } from './types';
+import type { AccountNode, Household } from './types';
 
-function actor(over: Partial<Actor> = {}): Actor {
+interface ActorOverrides {
+  current_age?: number;
+  horizon_age?: number;
+}
+function actor(over: ActorOverrides = {}): Household {
   return {
-    current_age: 60,
-    horizon_age: 95,
+    scenario_name: 'test',
+    horizon_age: over.horizon_age ?? 95,
     cash_account_id: 'cash',
     jurisdiction_account_id: 'tax',
-    scenario_name: 'test',
-    ...over,
+    actors: [
+      { id: 'primary', name: 'Primary', current_age: over.current_age ?? 60, alive: true },
+    ],
+    primary_actor_id: 'primary',
   };
 }
 

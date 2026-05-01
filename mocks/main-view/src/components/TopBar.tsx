@@ -5,7 +5,7 @@ import { exportScenarioJson, importScenarioJson, useStore } from '../store';
 export function TopBar() {
   const dollarMode = useStore((s) => s.dollarMode);
   const toggle = useStore((s) => s.toggleDollarMode);
-  const scenarioName = useStore((s) => s.actor.scenario_name);
+  const scenarioName = useStore((s) => s.household.scenario_name);
   const newBlankScenario = useStore((s) => s.newBlankScenario);
   const resetToSeed = useStore((s) => s.resetToSeed);
   const fileInputRef = useRef<HTMLInputElement | null>(null);

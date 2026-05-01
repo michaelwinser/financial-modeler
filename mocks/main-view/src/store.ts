@@ -5,26 +5,32 @@ import type {
   AccountNode,
   ActionTemplate,
   Actor,
+  Household,
   TimelineEvent,
   YearlyProjection,
 } from './types';
 import { project } from './engine';
-import { seedAccounts, seedActor, seedEvents } from './seed';
+import { seedAccounts, seedHousehold, seedEvents } from './seed';
 import { resolveSubjectToRmd } from './tax';
+import { ownerActor, primaryActor } from './household';
 
 const STORAGE_KEY = 'financial-modeler-v1';
-const SCHEMA_VERSION = 1;
+// Bumped to 2 in Phase 3.5 (Actor → Household + Person split). The
+// persist middleware backs up v1 localStorage as a JSON download before
+// resetting; importScenarioJson migrates v1 payloads inline.
+const SCHEMA_VERSION = 2;
 
 export type DollarMode = 'nominal' | 'real';
 export type Selection =
   | { kind: 'none' }
   | { kind: 'account'; id: string }
   | { kind: 'event'; id: string }
-  | { kind: 'actor' };
+  | { kind: 'actor' }
+  | { kind: 'person'; id: string };
 
 interface State {
   accounts: AccountNode[];
-  actor: Actor;
+  household: Household;
   events: TimelineEvent[];
   dollarMode: DollarMode;
   selection: Selection;
@@ -40,7 +46,10 @@ interface State {
     key: K,
     value: AccountNode[K],
   ) => void;
-  setActorField: <K extends keyof Actor>(key: K, value: Actor[K]) => void;
+  setHouseholdField: <K extends keyof Household>(key: K, value: Household[K]) => void;
+  setActorField: <K extends keyof Actor>(actorId: string, key: K, value: Actor[K]) => void;
+  addActor: (name?: string, current_age?: number) => string;
+  removeActor: (id: string) => { ok: boolean; reason?: string };
   resetToSeed: () => void;
   newBlankScenario: () => void;
   // create / delete
@@ -71,41 +80,42 @@ const newId = (prefix: string): string =>
 // inject.
 function clampAccount(a: AccountNode): AccountNode {
   const next: AccountNode = { ...a };
-  // Ages within a reasonable lifespan.
   if (next.start_age !== undefined)
     next.start_age = Math.max(0, Math.min(130, Math.round(next.start_age)));
   if (next.end_age !== undefined)
     next.end_age = Math.max(0, Math.min(130, Math.round(next.end_age)));
-  // end_age must not precede start_age.
   if (
     next.start_age !== undefined &&
     next.end_age !== undefined &&
     next.end_age < next.start_age
   )
     next.end_age = next.start_age;
-  // Asset balances never go below zero (use a liability for debt).
   if (next.kind === 'asset' && next.start_value !== undefined && next.start_value < 0)
     next.start_value = 0;
-  // Income / expense annual amounts are non-negative.
   if (
     (next.kind === 'income' || next.kind === 'expense') &&
     next.annual_amount !== undefined &&
     next.annual_amount < 0
   )
     next.annual_amount = 0;
-  // Cost basis non-negative.
   if (next.cost_basis !== undefined && next.cost_basis < 0) next.cost_basis = 0;
   return next;
 }
 
-function clampActor(a: Actor): Actor {
-  const next = { ...a };
-  next.current_age = Math.max(0, Math.min(130, Math.round(next.current_age)));
-  next.horizon_age = Math.max(
-    next.current_age + 1,
-    Math.min(130, Math.round(next.horizon_age)),
-  );
-  return next;
+function clampActor(p: Actor): Actor {
+  return {
+    ...p,
+    current_age: Math.max(0, Math.min(130, Math.round(p.current_age))),
+  };
+}
+
+function clampHousehold(h: Household): Household {
+  const youngest = Math.min(...h.actors.map((a) => a.current_age));
+  return {
+    ...h,
+    horizon_age: Math.max(youngest + 1, Math.min(130, Math.round(h.horizon_age))),
+    actors: h.actors.map(clampActor),
+  };
 }
 
 function defaultAccountForKind(kind: AccountKind, parent_id: string | null): AccountNode {
@@ -165,7 +175,6 @@ function defaultEventForAction(
   const id = newId('evt');
   const action: ActionTemplate = { type: actionType };
   const parameters: Record<string, number> = {};
-  // Wire common defaults so the stub feels alive immediately.
   if (actionType === 'transfer') {
     action.param_ref = 'amount';
     parameters.amount = 50000;
@@ -190,11 +199,36 @@ function defaultEventForAction(
   };
 }
 
+// One-time auto-backup: when the persist middleware sees a v1 blob, it
+// writes a JSON file to the user's downloads before resetting state.
+// Wrapped in try/catch so jsdom (tests) doesn't blow up — file download
+// machinery is browser-only.
+function downloadV1Backup(persisted: unknown): void {
+  try {
+    const blob = new Blob([JSON.stringify(persisted, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `financial-modeler-v1-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    // Best effort. If we can't trigger a download (e.g., test env), the
+    // user just loses v1 state — same outcome as if migration weren't
+    // attempted at all.
+    console.warn('failed to back up v1 localStorage state:', e);
+  }
+}
+
 export const useStore = create<State>()(
   persist(
     (set) => ({
   accounts: seedAccounts,
-  actor: seedActor,
+  household: seedHousehold,
   events: seedEvents,
   dollarMode: 'nominal',
   selection: { kind: 'none' },
@@ -247,10 +281,63 @@ export const useStore = create<State>()(
         return clampAccount(next);
       }),
     })),
-  setActorField: (key, value) =>
+  setHouseholdField: (key, value) =>
     set((s) => ({
-      actor: clampActor({ ...s.actor, [key]: value } as Actor),
+      household: clampHousehold({ ...s.household, [key]: value } as Household),
     })),
+  setActorField: (actorId, key, value) =>
+    set((s) => ({
+      household: clampHousehold({
+        ...s.household,
+        actors: s.household.actors.map((a) =>
+          a.id === actorId ? ({ ...a, [key]: value } as Actor) : a,
+        ),
+      }),
+    })),
+  addActor: (name, current_age) => {
+    const id = newId('actor');
+    const actor: Actor = {
+      id,
+      name: name ?? 'Spouse',
+      current_age: current_age ?? 60,
+      alive: true,
+    };
+    set((s) => ({
+      household: { ...s.household, actors: [...s.household.actors, actor] },
+      selection: { kind: 'person', id },
+    }));
+    return id;
+  },
+  removeActor: (id) => {
+    let result: { ok: boolean; reason?: string } = { ok: true };
+    set((s) => {
+      if (s.household.actors.length <= 1) {
+        result = { ok: false, reason: 'cannot remove the last actor' };
+        return s;
+      }
+      if (s.household.primary_actor_id === id) {
+        result = { ok: false, reason: 'cannot remove the primary actor' };
+        return s;
+      }
+      // Drop ownership of accounts/streams from the removed actor.
+      // Empty owners collapses to default (= primary), which is the
+      // right behavior for survivor inheritance.
+      const accounts = s.accounts.map((a) => {
+        if (!a.owners || !a.owners.includes(id)) return a;
+        const next = a.owners.filter((o) => o !== id);
+        return { ...a, owners: next.length > 0 ? next : undefined };
+      });
+      return {
+        accounts,
+        household: {
+          ...s.household,
+          actors: s.household.actors.filter((a) => a.id !== id),
+        },
+        selection: { kind: 'none' as const },
+      };
+    });
+    return result;
+  },
   resetToSeed: () =>
     set(() => {
       autoEventsCache = null;
@@ -258,7 +345,7 @@ export const useStore = create<State>()(
       projectionCache = null;
       return {
         accounts: seedAccounts,
-        actor: seedActor,
+        household: seedHousehold,
         events: seedEvents,
         selection: { kind: 'none' as const },
         hoveredEventId: null,
@@ -296,15 +383,17 @@ export const useStore = create<State>()(
         parent_id: null,
         effective_tax_rate: 0.25,
       };
+      const blankHousehold: Household = {
+        scenario_name: 'New scenario',
+        horizon_age: 95,
+        cash_account_id: cash.id,
+        jurisdiction_account_id: jurisdiction.id,
+        actors: [{ id: 'primary', name: 'Primary', current_age: 60, alive: true }],
+        primary_actor_id: 'primary',
+      };
       return {
         accounts: [economy, cash, jurisdiction],
-        actor: {
-          current_age: 60,
-          horizon_age: 95,
-          cash_account_id: cash.id,
-          jurisdiction_account_id: jurisdiction.id,
-          scenario_name: 'New scenario',
-        },
+        household: blankHousehold,
         events: [],
         selection: { kind: 'actor' as const },
         hoveredEventId: null,
@@ -334,16 +423,15 @@ export const useStore = create<State>()(
         };
         return s;
       }
-      const usedByActor =
-        s.actor.cash_account_id === id || s.actor.jurisdiction_account_id === id;
-      if (usedByActor) {
+      const usedByHousehold =
+        s.household.cash_account_id === id || s.household.jurisdiction_account_id === id;
+      if (usedByHousehold) {
         result = {
           ok: false,
-          reason: 'used by actor (cash sink or jurisdiction)',
+          reason: 'used by household (cash sink or jurisdiction)',
         };
         return s;
       }
-      // Drop attachments to this account from any events.
       const events = s.events.map((e) => ({
         ...e,
         attached_account_ids: e.attached_account_ids.filter((x) => x !== id),
@@ -426,15 +514,25 @@ export const useStore = create<State>()(
       name: STORAGE_KEY,
       version: SCHEMA_VERSION,
       storage: createJSONStorage(() => localStorage),
-      // Only persist scenario data and lightweight UI prefs.
-      // Selection / hover are ephemeral; don't pollute saved state.
       partialize: (s) => ({
         accounts: s.accounts,
-        actor: s.actor,
+        household: s.household,
         events: s.events,
         dollarMode: s.dollarMode,
         expandedNodes: Array.from(s.expandedNodes),
       }),
+      // v1 → v2 migration: trigger a one-time download of the v1 blob so
+      // the user can re-import it via the Import button if desired, then
+      // return undefined to let Zustand fall back to the seed defaults.
+      // We do NOT silently rewrite the v1 state into v2 — keeping the
+      // migration in importScenarioJson keeps it testable in one place.
+      migrate: (persisted, version) => {
+        if (version < SCHEMA_VERSION) {
+          downloadV1Backup(persisted);
+          return undefined; // signals "use defaults"
+        }
+        return persisted as State;
+      },
       // Sets aren't JSON-friendly — convert back on rehydrate.
       merge: (persisted, current) => {
         const p = persisted as Partial<State> & { expandedNodes?: string[] | Set<string> };
@@ -451,53 +549,58 @@ export const useStore = create<State>()(
 );
 
 // Module-level memoization caches for derived data shared across all
-// hook subscribers. We key on reference identity of the inputs — Zustand
-// keeps slice references stable when the underlying value is unchanged,
-// so cache hits are common and we avoid re-running the engine 3× per
-// render (once per useProjection caller).
+// hook subscribers.
 
 let autoEventsCache: {
   accounts: AccountNode[];
-  actor: Actor;
+  household: Household;
   result: TimelineEvent[];
 } | null = null;
 
 let projectionCache: {
   accounts: AccountNode[];
-  actor: Actor;
+  household: Household;
   events: TimelineEvent[];
   result: YearlyProjection[];
 } | null = null;
 
 // Synthesize "auto-events" derived from declarative fields on accounts.
 // Today: end_account events for income/expense streams whose end_age is
-// less than the actor's horizon_age. Derived on every read so the source
-// account remains the single source of truth.
+// less than the household horizon (anchored to the OWNER's age timeline);
+// recurring rmd events on RMD-subject accounts (anchored to the OWNER's
+// age 73). Derived on every read so the source account remains the
+// single source of truth.
 export function synthesizeAutoEvents(
   accounts: AccountNode[],
-  actor: Actor,
+  household: Household,
 ): TimelineEvent[] {
   if (
     autoEventsCache &&
     autoEventsCache.accounts === accounts &&
-    autoEventsCache.actor === actor
+    autoEventsCache.household === household
   ) {
     return autoEventsCache.result;
   }
-  const result = computeAutoEvents(accounts, actor);
-  autoEventsCache = { accounts, actor, result };
+  const result = computeAutoEvents(accounts, household);
+  autoEventsCache = { accounts, household, result };
   return result;
 }
 
 function computeAutoEvents(
   accounts: AccountNode[],
-  actor: Actor,
+  household: Household,
 ): TimelineEvent[] {
   const out: TimelineEvent[] = [];
+  const primary = primaryActor(household);
   for (const a of accounts) {
     if (a.kind !== 'income' && a.kind !== 'expense') continue;
     if (a.end_age === undefined) continue;
-    if (a.end_age >= actor.horizon_age) continue;
+    // Compare end_age against the OWNER's age at horizon (so partner
+    // streams ending at partner's 67 don't get a synthetic end_account
+    // when partner is 5 years younger).
+    const owner = ownerActor(household, a);
+    const ownerAgeAtHorizon = owner.current_age + (household.horizon_age - primary.current_age);
+    if (a.end_age >= ownerAgeAtHorizon) continue;
     out.push({
       id: `auto_end_${a.id}`,
       name: `End ${a.name.toLowerCase()}`,
@@ -508,37 +611,36 @@ function computeAutoEvents(
       parameters: {},
       actions: [{ type: 'end_account' }],
       auto_generated: true,
+      actor_id: owner.id,
     });
   }
   // RMD events: one recurring event per RMD-subject asset, ages 73 →
-  // horizon. The amount is computed dynamically by the engine each year
-  // from current balance × Uniform Lifetime Table divisor — we just
-  // trigger the action, no parameters. Accounts with subject_to_rmd
-  // explicitly false (or derived false from account_type) are skipped.
+  // OWNER's age at household horizon. Anchored to owner so partner's
+  // 401k drives RMDs from partner's 73, not primary's.
   const rmdStart = 73;
-  if (actor.horizon_age >= rmdStart) {
-    for (const a of accounts) {
-      if (a.kind !== 'asset') continue;
-      if (!resolveSubjectToRmd(a)) continue;
-      out.push({
-        id: `auto_rmd_${a.id}`,
-        name: `RMD on ${a.name.toLowerCase()}`,
-        description: `Auto-generated from ${a.name}.subject_to_rmd. IRS Uniform Lifetime Table; starts at age ${rmdStart}.`,
-        trigger_age: rmdStart,
-        end_age: actor.horizon_age,
-        kind: 'recurring',
-        attached_account_ids: [a.id],
-        parameters: {},
-        actions: [{ type: 'rmd' }],
-        auto_generated: true,
-      });
-    }
+  for (const a of accounts) {
+    if (a.kind !== 'asset') continue;
+    if (!resolveSubjectToRmd(a)) continue;
+    const owner = ownerActor(household, a);
+    const ownerAgeAtHorizon = owner.current_age + (household.horizon_age - primary.current_age);
+    if (ownerAgeAtHorizon < rmdStart) continue;
+    out.push({
+      id: `auto_rmd_${a.id}`,
+      name: `RMD on ${a.name.toLowerCase()}`,
+      description: `Auto-generated from ${a.name}.subject_to_rmd. IRS Uniform Lifetime Table; starts at ${owner.name}'s age ${rmdStart}.`,
+      trigger_age: rmdStart,
+      end_age: ownerAgeAtHorizon,
+      kind: 'recurring',
+      attached_account_ids: [a.id],
+      parameters: {},
+      actions: [{ type: 'rmd' }],
+      auto_generated: true,
+      actor_id: owner.id,
+    });
   }
   return out;
 }
 
-// Merged events (user + auto) — memoized so all subscribers share one
-// stable array reference when nothing relevant has changed.
 let mergedEventsCache: {
   events: TimelineEvent[];
   auto: TimelineEvent[];
@@ -563,9 +665,9 @@ function mergedEvents(
 
 export function useAllEvents(): TimelineEvent[] {
   const accounts = useStore((s) => s.accounts);
-  const actor = useStore((s) => s.actor);
+  const household = useStore((s) => s.household);
   const events = useStore((s) => s.events);
-  return mergedEvents(events, synthesizeAutoEvents(accounts, actor));
+  return mergedEvents(events, synthesizeAutoEvents(accounts, household));
 }
 
 // Import / export the full scenario as JSON. Carries the schema version
@@ -575,8 +677,49 @@ export interface ScenarioPayload {
   schemaVersion: number;
   exportedAt: string;
   accounts: AccountNode[];
-  actor: Actor;
+  household: Household;
   events: TimelineEvent[];
+}
+
+// v1 payload shape, kept here for the migration path. Defined as the
+// minimum subset we need to read; the engine no longer accepts it.
+interface V1ScenarioPayload {
+  schemaVersion?: 1;
+  accounts: AccountNode[];
+  actor: {
+    current_age: number;
+    horizon_age: number;
+    cash_account_id: string;
+    jurisdiction_account_id: string;
+    scenario_name: string;
+    filing_status?: 'single' | 'mfj';
+  };
+  events: TimelineEvent[];
+}
+
+function migrateV1ToV2(p: V1ScenarioPayload): ScenarioPayload {
+  const primary: Actor = {
+    id: 'primary',
+    name: 'Primary',
+    current_age: p.actor.current_age,
+    alive: true,
+  };
+  const household: Household = {
+    scenario_name: p.actor.scenario_name,
+    horizon_age: p.actor.horizon_age,
+    cash_account_id: p.actor.cash_account_id,
+    jurisdiction_account_id: p.actor.jurisdiction_account_id,
+    filing_status: p.actor.filing_status,
+    actors: [primary],
+    primary_actor_id: primary.id,
+  };
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    accounts: p.accounts,
+    household,
+    events: p.events,
+  };
 }
 
 export function exportScenarioJson(): string {
@@ -585,7 +728,7 @@ export function exportScenarioJson(): string {
     schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
     accounts: s.accounts,
-    actor: s.actor,
+    household: s.household,
     events: s.events,
   };
   return JSON.stringify(payload, null, 2);
@@ -601,27 +744,33 @@ export function importScenarioJson(json: string): { ok: boolean; reason?: string
   if (!parsed || typeof parsed !== 'object') {
     return { ok: false, reason: 'JSON root is not an object' };
   }
-  const p = parsed as Partial<ScenarioPayload>;
-  if (!Array.isArray(p.accounts)) return { ok: false, reason: 'missing or invalid `accounts` array' };
-  if (!Array.isArray(p.events)) return { ok: false, reason: 'missing or invalid `events` array' };
-  if (!p.actor || typeof p.actor !== 'object')
-    return { ok: false, reason: 'missing or invalid `actor` object' };
-  if (p.schemaVersion !== undefined && p.schemaVersion > SCHEMA_VERSION) {
-    return {
-      ok: false,
-      reason: `schema version ${p.schemaVersion} is newer than this app supports (${SCHEMA_VERSION}).`,
-    };
+  const obj = parsed as Record<string, unknown>;
+  if (!Array.isArray(obj.accounts)) return { ok: false, reason: 'missing or invalid `accounts` array' };
+  if (!Array.isArray(obj.events)) return { ok: false, reason: 'missing or invalid `events` array' };
+
+  // Detect v1 (has `actor`, no `household`) and migrate inline.
+  let payload: ScenarioPayload;
+  if (obj.household && typeof obj.household === 'object') {
+    if (typeof obj.schemaVersion === 'number' && obj.schemaVersion > SCHEMA_VERSION) {
+      return {
+        ok: false,
+        reason: `schema version ${obj.schemaVersion} is newer than this app supports (${SCHEMA_VERSION}).`,
+      };
+    }
+    payload = obj as unknown as ScenarioPayload;
+  } else if (obj.actor && typeof obj.actor === 'object') {
+    payload = migrateV1ToV2(obj as unknown as V1ScenarioPayload);
+  } else {
+    return { ok: false, reason: 'missing `household` (v2) or `actor` (v1) object' };
   }
-  // Replace state. Reset selection/hover so the UI doesn't reference stale ids.
-  // Defensive: clamp imported values so a bad file can't poison the engine.
+
   useStore.setState({
-    accounts: p.accounts.map(clampAccount),
-    actor: clampActor(p.actor as Actor),
-    events: p.events,
+    accounts: payload.accounts.map(clampAccount),
+    household: clampHousehold(payload.household),
+    events: payload.events,
     selection: { kind: 'none' },
     hoveredEventId: null,
   });
-  // Invalidate caches so the next render sees fresh derived data.
   autoEventsCache = null;
   mergedEventsCache = null;
   projectionCache = null;
@@ -630,18 +779,18 @@ export function importScenarioJson(json: string): { ok: boolean; reason?: string
 
 export function useProjection(): YearlyProjection[] {
   const accounts = useStore((s) => s.accounts);
-  const actor = useStore((s) => s.actor);
+  const household = useStore((s) => s.household);
   const events = useStore((s) => s.events);
-  const all = mergedEvents(events, synthesizeAutoEvents(accounts, actor));
+  const all = mergedEvents(events, synthesizeAutoEvents(accounts, household));
   if (
     projectionCache &&
     projectionCache.accounts === accounts &&
-    projectionCache.actor === actor &&
+    projectionCache.household === household &&
     projectionCache.events === all
   ) {
     return projectionCache.result;
   }
-  const result = project(accounts, actor, all);
-  projectionCache = { accounts, actor, events: all, result };
+  const result = project(accounts, household, all);
+  projectionCache = { accounts, household, events: all, result };
   return result;
 }

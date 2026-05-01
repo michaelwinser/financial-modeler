@@ -52,8 +52,8 @@ describe('UC1 — seed loads and remains valid', () => {
       }
     }
 
-    expect(ids.has(s.actor.cash_account_id)).toBe(true);
-    expect(ids.has(s.actor.jurisdiction_account_id)).toBe(true);
+    expect(ids.has(s.household.cash_account_id)).toBe(true);
+    expect(ids.has(s.household.jurisdiction_account_id)).toBe(true);
 
     for (const e of s.events) {
       for (const id of e.attached_account_ids) {
@@ -90,8 +90,8 @@ describe('UC2 — reset to blank scenario', () => {
     expect(kinds.has('ambient')).toBe(true);
     expect(kinds.has('asset')).toBe(true);
 
-    expect(s.accounts.some((a) => a.id === s.actor.cash_account_id)).toBe(true);
-    expect(s.accounts.some((a) => a.id === s.actor.jurisdiction_account_id)).toBe(true);
+    expect(s.accounts.some((a) => a.id === s.household.cash_account_id)).toBe(true);
+    expect(s.accounts.some((a) => a.id === s.household.jurisdiction_account_id)).toBe(true);
   });
 
   it('confirm cancel leaves state untouched', async () => {
@@ -118,7 +118,7 @@ describe('UC3 — reset to demo scenario', () => {
     const s = useStore.getState();
     expect(s.accounts.length).toBeGreaterThan(3);
     expect(s.events.length).toBeGreaterThan(0);
-    expect(s.actor.scenario_name).toMatch(/baseline/i);
+    expect(s.household.scenario_name).toMatch(/baseline/i);
   });
 });
 
@@ -134,7 +134,7 @@ describe('UC4 — edit Plan settings', () => {
     expect(useStore.getState().selection).toEqual({ kind: 'actor' });
     // Inspector should now expose the scenario name as an editable input.
     expect(
-      await screen.findByDisplayValue(useStore.getState().actor.scenario_name),
+      await screen.findByDisplayValue(useStore.getState().household.scenario_name),
     ).toBeInTheDocument();
   });
 
@@ -143,12 +143,12 @@ describe('UC4 — edit Plan settings', () => {
     await user.click(screen.getByText(/^plan settings$/i, { selector: '.tree-name' }));
 
     const titleInput = await screen.findByDisplayValue(
-      useStore.getState().actor.scenario_name,
+      useStore.getState().household.scenario_name,
     );
     await user.clear(titleInput);
     await user.type(titleInput, 'Connecticut Plan');
 
-    expect(useStore.getState().actor.scenario_name).toBe('Connecticut Plan');
+    expect(useStore.getState().household.scenario_name).toBe('Connecticut Plan');
   });
 });
 
@@ -178,7 +178,7 @@ describe('UC6 — set actor active jurisdiction', () => {
   it('clicking "Set as active jurisdiction" on an ambient updates actor.jurisdiction_account_id', async () => {
     // Start: actor on California; flip to Florida.
     const before = useStore.getState();
-    expect(before.actor.jurisdiction_account_id).toBe('tax_california');
+    expect(before.household.jurisdiction_account_id).toBe('tax_california');
     const fl = before.accounts.find((a) => a.id === 'tax_florida')!;
     expect(fl).toBeDefined();
 
@@ -191,7 +191,7 @@ describe('UC6 — set actor active jurisdiction', () => {
     const setActive = await screen.findByRole('button', { name: /set as active jurisdiction/i });
     await user.click(setActive);
 
-    expect(useStore.getState().actor.jurisdiction_account_id).toBe('tax_florida');
+    expect(useStore.getState().household.jurisdiction_account_id).toBe('tax_florida');
   });
 
   it('changing jurisdiction via the ActorInspector dropdown also works (path B)', async () => {
@@ -202,7 +202,7 @@ describe('UC6 — set actor active jurisdiction', () => {
     // Find the one that contains 'tax_florida' as an option value.
     const fl = useStore.getState().accounts.find((a) => a.id === 'tax_florida')!;
     expect(fl).toBeDefined();
-    await screen.findByDisplayValue(useStore.getState().actor.scenario_name);
+    await screen.findByDisplayValue(useStore.getState().household.scenario_name);
     const selects = screen.getAllByRole('combobox');
     const jurisdictionSelect = selects.find((s) =>
       Array.from(s.querySelectorAll('option')).some((o) => o.value === 'tax_florida'),
@@ -210,7 +210,7 @@ describe('UC6 — set actor active jurisdiction', () => {
     expect(jurisdictionSelect).toBeDefined();
     await user.selectOptions(jurisdictionSelect!, 'tax_florida');
 
-    expect(useStore.getState().actor.jurisdiction_account_id).toBe('tax_florida');
+    expect(useStore.getState().household.jurisdiction_account_id).toBe('tax_florida');
   });
 });
 
@@ -561,7 +561,7 @@ describe('P3.0 — filing_status select on the actor', () => {
     const select = await screen.findByLabelText(/filing status/i);
     expect((select as HTMLSelectElement).value).toBe('mfj'); // seed default
     await user.selectOptions(select, 'single');
-    expect(useStore.getState().actor.filing_status).toBe('single');
+    expect(useStore.getState().household.filing_status).toBe('single');
   });
 });
 
@@ -610,6 +610,67 @@ describe('P3.0 — RMD auto-event derivation', () => {
     // appear as rows in the timeline list.
     const rmdRows = screen.getAllByText(/^RMD on /i);
     expect(rmdRows.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------- Layer — Phase 3.5 couples --------------------------------------
+
+describe('P3.5 — adding a spouse', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('clicking + Add spouse appends a second actor to the household', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByText(/^plan settings$/i, { selector: '.tree-name' }));
+
+    const before = useStore.getState().household.actors.length;
+    expect(before).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: /\+ add spouse/i }));
+
+    const after = useStore.getState().household;
+    expect(after.actors).toHaveLength(2);
+    expect(after.filing_status).toBe('mfj');
+  });
+});
+
+describe('P3.5 — owner picker on an asset', () => {
+  beforeEach(() => {
+    useStore.getState().resetToSeed();
+    // Add a spouse so the owners control becomes visible.
+    useStore.getState().addActor('Spouse', 60);
+  });
+
+  it('toggling an owner checkbox updates account.owners', async () => {
+    const { user } = renderApp();
+    const target = useStore.getState().accounts.find((a) => a.id === 'schwab_msft')!;
+    await user.click(screen.getByText(target.name, { selector: '.tree-name' }));
+
+    const spouse = useStore.getState().household.actors.find((a) => a.name === 'Spouse')!;
+    const checkbox = await screen.findByLabelText(`${spouse.name} owner`);
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    await user.click(checkbox);
+
+    const after = useStore.getState().accounts.find((a) => a.id === 'schwab_msft')!;
+    expect(after.owners).toBeDefined();
+    expect(after.owners).toContain(spouse.id);
+  });
+});
+
+describe('P3.5 — death-of-spouse action', () => {
+  beforeEach(() => {
+    useStore.getState().resetToSeed();
+    useStore.getState().addActor('Spouse', 60);
+  });
+
+  it('+ One-shot → Death of spouse creates an event with a death action', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole('button', { name: /^\+ one-shot$/i }));
+    await user.click(screen.getByRole('button', { name: /^Death of spouse/i }));
+
+    const events = useStore.getState().events;
+    const death = events.find((e) => e.actions[0]?.type === 'death');
+    expect(death).toBeDefined();
+    expect(death!.kind).toBe('one_shot');
   });
 });
 

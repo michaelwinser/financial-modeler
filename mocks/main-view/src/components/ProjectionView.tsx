@@ -66,7 +66,7 @@ export function ProjectionView() {
   const projection = useProjection();
   const dollarMode = useStore((s) => s.dollarMode);
   const events = useAllEvents();
-  const actor = useStore((s) => s.actor);
+  const household = useStore((s) => s.household);
   const hoveredEventId = useStore((s) => s.hoveredEventId);
   const setHovered = useStore((s) => s.setHoveredEvent);
   const selection = useStore((s) => s.selection);
@@ -96,8 +96,11 @@ export function ProjectionView() {
     [projection, dollarMode],
   );
 
-  const minAge = actor.current_age;
-  const maxAge = actor.horizon_age;
+  // The chart's X axis is the primary actor's age timeline; partner's
+  // ages are rendered as separate annotations downstream when needed.
+  const primary = household.actors.find((a) => a.id === household.primary_actor_id) ?? household.actors[0];
+  const minAge = primary.current_age;
+  const maxAge = household.horizon_age;
   const innerWidth = (containerRect?.width ?? 800) - CHART_LEFT_PAD - CHART_RIGHT_PAD;
   const ageToX = (age: number): number =>
     CHART_LEFT_PAD + ((age - minAge) / (maxAge - minAge)) * innerWidth;

@@ -117,6 +117,13 @@ export interface AccountNode {
   annual_amount?: number; // base amount at start_age (nominal)
   growth_rate?: FieldValue; // annual nominal growth applied to annual_amount
   tax_deductible?: boolean; // expense streams only: reduces taxable income by their amount
+  // Phase 3.5 ownership. Array of Actor.id values. Defaults to
+  // [Household.primary_actor_id] when undefined. For asset accounts,
+  // length > 1 means joint ownership; on death of one owner the
+  // surviving spouse inherits. For income/expense streams, owners[0]
+  // determines whose age drives start_age/end_age and whose RMD
+  // obligations apply.
+  owners?: string[];
 }
 
 // =====================================================================
@@ -130,7 +137,8 @@ export type ActionType =
   | 'liquidate' // sell asset; basis to ordinary tax, gains to LTCG, cash to sink
   | 'reparent' // change an account's parent (e.g., jurisdiction switch)
   | 'end_account' // mark account inactive at this age
-  | 'rmd'; // dynamically-sized withdrawal from a tax-deferred account using the IRS Uniform Lifetime Table
+  | 'rmd' // dynamically-sized withdrawal from a tax-deferred account using the IRS Uniform Lifetime Table
+  | 'death'; // mark an actor inactive; surviving spouse inherits accounts; filing status flips MFJ→single
 
 export interface ActionTemplate {
   type: ActionType;
@@ -139,6 +147,7 @@ export interface ActionTemplate {
   param_ref?: string; // name of an event parameter to use as value
   target_account?: string; // for transfer/liquidate; the destination
   new_parent?: string; // for reparent
+  actor_id?: string; // for death; which actor dies
 }
 
 export interface TimelineEvent {
@@ -152,19 +161,36 @@ export interface TimelineEvent {
   parameters: Record<string, number>; // shared across all attachments
   actions: ActionTemplate[];
   auto_generated?: boolean; // true if synthesized from declarative fields
+  // Phase 3.5: which actor's age timeline drives trigger_age / end_age.
+  // Undefined → household primary actor (back-compat for v1 scenarios).
+  actor_id?: string;
 }
 
 // =====================================================================
-// Actor (the user)
+// Household — one or two real people sharing a tax filing and a
+// portfolio. Phase 3.5 promoted the singleton `Actor` to a household
+// container; per-person fields (current_age, alive) live on individual
+// `Actor` records.
 // =====================================================================
 
+// One human in the household. Has an age timeline and an alive flag
+// (toggled by a death event during projection). Income streams, RMDs,
+// and account ownership reference an Actor by id.
 export interface Actor {
+  id: string;
+  name: string;
   current_age: number;
-  horizon_age: number;
+  alive: boolean; // false post-death event
+}
+
+export interface Household {
+  scenario_name: string;
+  horizon_age: number; // household-level — projection stops here
   cash_account_id: string; // the sink for income/expenses/withdrawals
   jurisdiction_account_id: string; // currently-active jurisdiction node
-  scenario_name: string;
   filing_status?: FilingStatus; // default 'single'; bracket-walking selects the right table
+  actors: Actor[]; // 1 or 2 people; primary is referenced by primary_actor_id
+  primary_actor_id: string; // the lead person (used for fallback/back-compat)
 }
 
 // =====================================================================

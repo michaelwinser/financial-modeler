@@ -29,6 +29,7 @@ function summarize(e: TimelineEvent): string {
   if (e.actions[0].type === 'end_account') return `end account, ${ageRange}`;
   if (e.actions[0].type === 'set_value') return `set ${e.actions[0].field ?? '?'}, ${ageRange}`;
   if (e.actions[0].type === 'rmd') return `RMD, ${ageRange}`;
+  if (e.actions[0].type === 'death') return `death of ${e.actions[0].actor_id ?? 'actor'}, ${ageRange}`;
   return ageRange;
 }
 
@@ -44,6 +45,7 @@ const actionOptions: Array<{
   { type: 'reparent', label: 'Reparent', description: 'change actor jurisdiction (e.g. state move)' },
   { type: 'end_account', label: 'End stream', description: 'stop an income/expense at this age' },
   { type: 'rmd', label: 'RMD', description: 'IRS Uniform Lifetime withdrawal from a tax-deferred account' },
+  { type: 'death', label: 'Death of spouse', description: 'survivor inherits assets; filing flips MFJ → single' },
 ];
 
 export function EventTimeline() {

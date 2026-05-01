@@ -1,11 +1,11 @@
 import type {
   AccountNode,
-  Actor,
   AssetClass,
   BracketTable,
   BracketTablesByStatus,
   FieldValue,
   FilingStatus,
+  Household,
   IrmaaTier,
   IrmaaTiersByStatus,
   TimelineEvent,
@@ -19,6 +19,7 @@ import {
   resolveTaxTreatment,
   uniformLifetimeDivisor,
 } from './tax';
+import { actorById, ownerActor, primaryActor } from './household';
 
 // =====================================================================
 // Tree resolution helpers
@@ -268,7 +269,7 @@ interface SimState {
   inflation_index: number;
 }
 
-function initSim(accounts: AccountNode[], actor: Actor): SimState {
+function initSim(accounts: AccountNode[], household: Household): SimState {
   const m = new Map<string, SimAccount>();
   for (const node of accounts) {
     m.set(node.id, {
@@ -281,7 +282,7 @@ function initSim(accounts: AccountNode[], actor: Actor): SimState {
   }
   return {
     accounts: m,
-    jurisdiction_id: actor.jurisdiction_account_id,
+    jurisdiction_id: household.jurisdiction_account_id,
     inflation_index: 1,
   };
 }
@@ -317,7 +318,8 @@ function applyAction(
   attachedId: string,
   action: ActionTemplate,
   acc_tax: YearAccumulator,
-  age: number,
+  yi: number,
+  household: Household,
 ): ActionResult {
   const r = emptyActionResult();
 
@@ -325,6 +327,39 @@ function applyAction(
   // attached account, so it runs even when attachedId is empty.
   if (action.type === 'reparent') {
     if (action.new_parent) sim.jurisdiction_id = action.new_parent;
+    return r;
+  }
+
+  // Death runs at the household level. Mutates the household-clone's
+  // actor.alive flag, transfers account ownership from the decedent to
+  // surviving spouse(s), and flips filing status. Streams owned by a
+  // dead actor stop producing income (handled in applyIncomeAndExpenses
+  // via the alive check).
+  if (action.type === 'death') {
+    const id = action.actor_id ?? household.primary_actor_id;
+    const target = household.actors.find((a) => a.id === id);
+    if (target) target.alive = false;
+    if (household.filing_status === 'mfj') household.filing_status = 'single';
+    // Transfer ownership of decedent's ASSET accounts to the surviving
+    // spouse (first remaining alive actor; falls back to primary).
+    // Joint assets collapse to surviving-spouse ownership; spousal
+    // rollover/step-up is tax-free, so no event accumulator updates.
+    // Income/expense streams are NOT transferred — a decedent's salary
+    // doesn't continue posthumously. The ownership stays as-is and the
+    // stream filter in applyIncomeAndExpenses skips streams whose owner
+    // is no longer alive.
+    const survivors = household.actors.filter((a) => a.alive && a.id !== id);
+    const heir = survivors[0] ?? household.actors.find((a) => a.id === household.primary_actor_id);
+    if (heir) {
+      for (const sa of sim.accounts.values()) {
+        if (sa.node.kind !== 'asset' && sa.node.kind !== 'liability') continue;
+        const owners = sa.node.owners ?? [household.primary_actor_id];
+        if (!owners.includes(id)) continue;
+        const next = owners.filter((o) => o !== id);
+        if (!next.includes(heir.id)) next.push(heir.id);
+        sa.node = { ...sa.node, owners: next };
+      }
+    }
     return r;
   }
 
@@ -392,12 +427,11 @@ function applyAction(
     acc.active = false;
   } else if (action.type === 'rmd') {
     // Required Minimum Distribution: divide prior-end balance by the IRS
-    // Uniform Lifetime Table divisor for the current age. Amount is
-    // ordinary income; cash flows gross to the sink (year-end bracket
-    // walk handles the tax). No-op below age 73 — synthesizer fires the
-    // event each year ≥73, but a hand-attached event before then would
-    // simply do nothing rather than throw.
-    const divisor = uniformLifetimeDivisor(age);
+    // Uniform Lifetime Table divisor for the OWNER's current age. With
+    // two-actor households, each spouse's age 73 starts their own RMD
+    // schedule; we read it off the account's first owner.
+    const ownerAge = ownerActor(household, acc.node).current_age + yi;
+    const divisor = uniformLifetimeDivisor(ownerAge);
     if (divisor !== undefined && acc.balance > 0) {
       const amt = Math.min(acc.balance / divisor, acc.balance);
       acc.balance -= amt;
@@ -415,20 +449,26 @@ function applyEvent(
   sim: SimState,
   event: TimelineEvent,
   acc_tax: YearAccumulator,
-  age: number,
+  yi: number,
+  household: Household,
 ): ActionResult {
   const out = emptyActionResult();
   const ids = event.attached_account_ids.length > 0 ? event.attached_account_ids : [''];
   for (const id of ids) {
     for (const a of event.actions) {
-      const r = applyAction(sim, event, id, a, acc_tax, age);
+      const r = applyAction(sim, event, id, a, acc_tax, yi, household);
       out.liquidationProceeds += r.liquidationProceeds;
     }
   }
   return out;
 }
 
-function eventFires(event: TimelineEvent, age: number): boolean {
+function eventFires(event: TimelineEvent, yi: number, household: Household): boolean {
+  // trigger_age is interpreted on the event's actor_id timeline (default
+  // = household primary). Lets a partner-anchored event fire at the
+  // partner's age 73 even when primary is 75.
+  const owner = actorById(household, event.actor_id);
+  const age = owner.current_age + yi;
   if (event.kind === 'one_shot') return event.trigger_age === age;
   const end = event.end_age ?? event.trigger_age;
   return age >= event.trigger_age && age <= end;
@@ -449,9 +489,16 @@ interface FlowResult {
 // the year's ordinary-income accumulator; expense flows gross out of cash
 // and (when tax_deductible) reduces ordinary income. Year-end will compute
 // the tax bill once.
+//
+// Per-stream age comparison reads the OWNER actor's age — partner's
+// salary ends at partner's 67, primary's SS starts at primary's 70, etc.
+// Streams owned by a non-alive actor are skipped (modelling: when a
+// spouse dies, their salary stream stops; survivor SS is handled by the
+// death event explicitly assigning the bigger benefit to the survivor).
 function applyIncomeAndExpenses(
   sim: SimState,
-  age: number,
+  yi: number,
+  household: Household,
   acc_tax: YearAccumulator,
 ): FlowResult {
   let income = 0;
@@ -463,6 +510,9 @@ function applyIncomeAndExpenses(
   for (const sa of sim.accounts.values()) {
     if (!sa.active) continue;
     const n = sa.node;
+    const owner = ownerActor(household, n);
+    if (!owner.alive && (n.kind === 'income' || n.kind === 'expense')) continue;
+    const age = owner.current_age + yi;
     if (n.kind === 'income') {
       if (n.start_age !== undefined && age < n.start_age) continue;
       if (n.end_age !== undefined && age > n.end_age) continue;
@@ -595,11 +645,15 @@ function evolveInflation(sim: SimState): void {
 
 export function project(
   accounts: AccountNode[],
-  actor: Actor,
+  household: Household,
   events: TimelineEvent[],
 ): YearlyProjection[] {
   const startYear = new Date().getFullYear();
-  const horizon = actor.horizon_age - actor.current_age;
+  // Horizon is anchored to the household primary's age timeline. Other
+  // actors may be older or younger; their per-year ages are computed via
+  // (their.current_age + yi) wherever per-actor reasoning is needed.
+  const primary = primaryActor(household);
+  const horizon = household.horizon_age - primary.current_age;
 
   const scenarios: Array<['baseline' | 'best' | 'worst', number]> = [
     ['baseline', 0],
@@ -626,32 +680,42 @@ export function project(
   const eventsPerYear: TimelineEvent[][] = Array.from({ length: horizon + 1 }, () => []);
 
   for (const [label, shift] of scenarios) {
-    const sim = initSim(accounts, actor);
+    const sim = initSim(accounts, household);
+    // The death action mutates household.actors[i].alive AND filing_status
+    // during projection; we work on a deep clone per scenario so the cone
+    // (best/baseline/worst) replays cleanly without sticky state from a
+    // prior run, and so the caller's input household isn't mutated.
+    const hh: Household = {
+      ...household,
+      actors: household.actors.map((a) => ({ ...a })),
+    };
 
     for (let yi = 0; yi <= horizon; yi++) {
-      const age = actor.current_age + yi;
+      const primaryAge = primary.current_age + yi;
       if (yi > 0) evolveInflation(sim);
 
-      const filingStatus: FilingStatus = actor.filing_status ?? 'single';
       const acc_tax = emptyYearAccumulator();
 
-      const triggered = events.filter((e) => eventFires(e, age));
+      const triggered = events.filter((e) => eventFires(e, yi, hh));
       if (label === 'baseline') eventsPerYear[yi] = triggered;
       let yearLiquidation = 0;
       for (const e of triggered) {
-        const r = applyEvent(sim, e, acc_tax, age);
+        const r = applyEvent(sim, e, acc_tax, yi, hh);
         yearLiquidation += r.liquidationProceeds;
       }
 
-      const flow = applyIncomeAndExpenses(sim, age, acc_tax);
+      const flow = applyIncomeAndExpenses(sim, yi, hh, acc_tax);
 
       // Build tax tables AFTER events have fired — a reparent event may
-      // have switched the active jurisdiction (e.g., Move to Florida).
-      // Forced-sale uses the same tables.
+      // have switched the active jurisdiction (e.g., Move to Florida),
+      // and a death event may have flipped MFJ → single.
+      const filingStatus: FilingStatus = hh.filing_status ?? 'single';
       const tables = buildTaxTables(snapshotMap(sim), sim.jurisdiction_id, filingStatus);
 
       // Initial year-end tax based on income/event/conversion activity.
-      let yearTax = computeYearEndTax(acc_tax, tables, age);
+      // Use primary's age for IRMAA eligibility (≥ 65); a more refined
+      // model would per-actor IRMAA, but that's overkill for V1.
+      let yearTax = computeYearEndTax(acc_tax, tables, primaryAge);
       const cash = sim.accounts.get('cash_reserves');
       if (cash) cash.balance -= yearTax.total;
 
@@ -661,7 +725,7 @@ export function project(
       // ordinary income; deduct the delta. One pass usually suffices for
       // single-bracket cases; bracket transitions may slightly under-pay.
       const forcedSaleProceeds = applyForcedSales(sim, acc_tax, tables);
-      const yearTax2 = computeYearEndTax(acc_tax, tables, age);
+      const yearTax2 = computeYearEndTax(acc_tax, tables, primaryAge);
       const taxDelta = yearTax2.total - yearTax.total;
       if (taxDelta !== 0 && cash) cash.balance -= taxDelta;
       yearTax = yearTax2;
@@ -708,7 +772,7 @@ export function project(
   const out: YearlyProjection[] = [];
   for (let yi = 0; yi <= horizon; yi++) {
     out.push({
-      age: actor.current_age + yi,
+      age: primary.current_age + yi,
       year: startYear + yi,
       total_baseline: series.baseline[yi],
       total_best: series.best[yi],

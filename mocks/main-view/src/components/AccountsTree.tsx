@@ -22,12 +22,24 @@ const kindOptions: AccountKind[] = ['asset', 'income', 'expense', 'ambient'];
 
 export function AccountsTree() {
   const accounts = useStore((s) => s.accounts);
+  const household = useStore((s) => s.household);
   const expanded = useStore((s) => s.expandedNodes);
   const toggleExpanded = useStore((s) => s.toggleExpanded);
   const selection = useStore((s) => s.selection);
   const select = useStore((s) => s.select);
   const addAccount = useStore((s) => s.addAccount);
   const [showPicker, setShowPicker] = useState(false);
+
+  // Owner-badge helper: only meaningful in 2+ actor households, and
+  // only renders when the account specifies a non-default owner.
+  const ownerBadge = (node: AccountNode): string | null => {
+    if (household.actors.length < 2) return null;
+    const owners = node.owners;
+    if (!owners || owners.length === 0) return null;
+    return owners
+      .map((id) => household.actors.find((a) => a.id === id)?.name ?? id)
+      .join(' + ');
+  };
 
   const childrenOf = (parentId: string | null): AccountNode[] =>
     accounts.filter((a) => a.parent_id === parentId);
@@ -62,6 +74,10 @@ export function AccountsTree() {
           >
             {badge.label}
           </span>
+          {(() => {
+            const ob = ownerBadge(node);
+            return ob ? <span className="tree-badge tree-badge-owner">{ob}</span> : null;
+          })()}
           {node.kind === 'asset' && node.start_value !== undefined ? (
             <span className="tree-value">{fmtMoney(node.start_value)}</span>
           ) : node.kind === 'income' || node.kind === 'expense' ? (

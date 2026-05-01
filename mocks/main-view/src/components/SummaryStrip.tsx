@@ -11,7 +11,7 @@ const fmtMoney = (v: number): string =>
 export function SummaryStrip() {
   const projection = useProjection();
   const dollarMode = useStore((s) => s.dollarMode);
-  const actor = useStore((s) => s.actor);
+  const horizon = useStore((s) => s.household.horizon_age);
 
   const start = projection[0];
   const end = projection[projection.length - 1];
@@ -36,7 +36,7 @@ export function SummaryStrip() {
         <div className="stat-value">{fmtMoney(startNet)}</div>
       </div>
       <div className="stat">
-        <div className="stat-label">Net worth at age {actor.horizon_age}</div>
+        <div className="stat-label">Net worth at age {horizon}</div>
         <div className="stat-value">{fmtMoney(endNet)}</div>
         <div className="stat-sub">
           {fmtMoney(endWorst)} – {fmtMoney(endBest)}

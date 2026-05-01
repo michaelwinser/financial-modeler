@@ -1,4 +1,4 @@
-import type { AccountNode, Actor, TimelineEvent } from './types';
+import type { AccountNode, Household, TimelineEvent } from './types';
 
 // ---------------------------------------------------------------------
 // Account tree.
@@ -302,16 +302,21 @@ export const seedAccounts: AccountNode[] = [
 ];
 
 // ---------------------------------------------------------------------
-// Actor
+// Household — single-person seed for Phase 3.5. Couples scenarios are
+// configured by adding a second actor via the UI; the seed stays
+// minimal so engine snapshots remain stable.
 // ---------------------------------------------------------------------
 
-export const seedActor: Actor = {
-  current_age: 62,
+export const seedHousehold: Household = {
+  scenario_name: 'Pre-retirement Baseline 2026',
   horizon_age: 95,
   cash_account_id: 'cash_reserves',
   jurisdiction_account_id: 'tax_california',
-  scenario_name: 'Pre-retirement Baseline 2026',
   filing_status: 'mfj',
+  actors: [
+    { id: 'primary', name: 'Primary', current_age: 62, alive: true },
+  ],
+  primary_actor_id: 'primary',
 };
 
 // ---------------------------------------------------------------------
