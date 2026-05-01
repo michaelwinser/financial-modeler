@@ -30,6 +30,7 @@ function digest(p: YearlyProjection[]) {
     expenses_paid: Math.round(y.expenses_paid),
     event_liquidation_proceeds: Math.round(y.event_liquidation_proceeds),
     forced_sale_proceeds: Math.round(y.forced_sale_proceeds),
+    embedded_gain: Math.round(y.embedded_gain),
     cumulative_inflation_index: Number(y.cumulative_inflation_index.toFixed(6)),
   }));
 }

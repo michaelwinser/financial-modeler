@@ -374,6 +374,99 @@ describe('engine action: reparent', () => {
 
 // ---------- end_account action ----------------------------------------------
 
+describe('engine: tax_deductible expenses', () => {
+  it('reduces year-end ordinary income by the deductible amount', () => {
+    // Setup: $100k of ordinary income, $30k expense. With tax_deductible
+    // the taxable ordinary income is $70k (saving 30% × $30k = $9k tax).
+    const accounts = [
+      ...baseAccounts(),
+      income('salary', 'us', { annual_amount: 100_000, start_age: 60, end_age: 60, growth_rate: 0 }),
+      expense('mortgage_interest', 'us', {
+        annual_amount: 30_000,
+        start_age: 60,
+        end_age: 60,
+        growth_rate: 0,
+        tax_deductible: true,
+      }),
+    ];
+    const result = project(accounts, actor({ horizon_age: 60 }), []);
+    // Ordinary tax should be 30% × (100k − 30k) = 21k, not 30% × 100k = 30k.
+    expect(result[0].tax_ordinary).toBeCloseTo(21_000, 0);
+  });
+
+  it('a non-deductible expense leaves ordinary income unreduced', () => {
+    const accounts = [
+      ...baseAccounts(),
+      income('salary', 'us', { annual_amount: 100_000, start_age: 60, end_age: 60, growth_rate: 0 }),
+      expense('groceries', 'us', {
+        annual_amount: 30_000,
+        start_age: 60,
+        end_age: 60,
+        growth_rate: 0,
+        tax_deductible: false,
+      }),
+    ];
+    const result = project(accounts, actor({ horizon_age: 60 }), []);
+    expect(result[0].tax_ordinary).toBeCloseTo(30_000, 0);
+  });
+});
+
+describe('engine: embedded_gain (step-up tracker)', () => {
+  it('reports unrealized gain on a taxable asset (balance − basis)', () => {
+    const accounts = [
+      ...baseAccounts(),
+      asset('brk', 'us', {
+        asset_class: 'cash', // 0 yield
+        tax_treatment: 'taxable',
+        start_value: 1_000_000,
+        cost_basis: 400_000,
+      }),
+    ];
+    const result = project(accounts, actor({ horizon_age: 60 }), []);
+    expect(result[0].embedded_gain).toBeCloseTo(600_000, 0);
+  });
+
+  it('excludes tax_deferred and tax_free accounts (no step-up benefit)', () => {
+    const accounts = [
+      ...baseAccounts(),
+      asset('ira', 'us', {
+        asset_class: 'cash',
+        tax_treatment: 'tax_deferred',
+        start_value: 1_000_000,
+        cost_basis: 0,
+      }),
+      asset('roth', 'us', {
+        asset_class: 'cash',
+        tax_treatment: 'tax_free',
+        start_value: 500_000,
+        cost_basis: 0,
+      }),
+    ];
+    const result = project(accounts, actor({ horizon_age: 60 }), []);
+    expect(result[0].embedded_gain).toBeCloseTo(0, 0);
+  });
+
+  it('grows over time as the asset appreciates and basis stays flat', () => {
+    const accounts = [
+      ambient('us', { equity_yield: 0.10, inflation_rate: 0 }),
+      ambient('tax', { effective_tax_rate: 0 }),
+      asset('cash_reserves', 'us', { asset_class: 'cash', tax_treatment: 'taxable', start_value: 0 }),
+      asset('brk', 'us', {
+        asset_class: 'equity',
+        tax_treatment: 'taxable',
+        start_value: 1_000_000,
+        cost_basis: 1_000_000, // no embedded gain at t=0
+      }),
+    ];
+    const result = project(accounts, actor({ horizon_age: 62 }), []);
+    // YearlyProjection[0] is end-of-first-year (growAssets has run once).
+    // 1.0M × 1.10 = 1.1M, basis 1.0M → 100k gain.
+    expect(result[0].embedded_gain).toBeCloseTo(100_000, 0);
+    expect(result[1].embedded_gain).toBeCloseTo(210_000, 0);
+    expect(result[2].embedded_gain).toBeCloseTo(331_000, 0);
+  });
+});
+
 describe('engine action: rmd', () => {
   it('withdraws balance/divisor at age 73 and adds it as ordinary income', () => {
     // 73 → divisor 26.5 → RMD = 1_000_000 / 26.5 ≈ 37_736

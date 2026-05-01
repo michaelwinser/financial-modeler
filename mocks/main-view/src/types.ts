@@ -190,4 +190,10 @@ export interface YearlyProjection {
   expense_by_source: Record<string, number>; // keyed by expense account id
   event_liquidation_proceeds: number; // NUA, house sale, etc.
   forced_sale_proceeds: number; // forced withdrawals to cover negative cash
+  // Sum of (balance − basis) over taxable assets at year end. Used by
+  // analysis views to show the unrealized gain that would step up if the
+  // actor died this year (heirs inherit at fair market value, eliminating
+  // that gain from future LTCG). Tax-deferred accounts get no step-up;
+  // Roth has no embedded gain to step up.
+  embedded_gain: number;
 }

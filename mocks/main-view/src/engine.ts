@@ -620,6 +620,7 @@ export function project(
   const expenseBySourcePerYear: Record<string, number>[] = [];
   const eventLiquidationPerYear: number[] = [];
   const forcedSalePerYear: number[] = [];
+  const embeddedGainPerYear: number[] = [];
   const byAccountSeries: Record<string, number>[] = [];
   const inflationSeries: number[] = [];
   const eventsPerYear: TimelineEvent[][] = Array.from({ length: horizon + 1 }, () => []);
@@ -683,9 +684,22 @@ export function project(
         eventLiquidationPerYear.push(yearLiquidation);
         forcedSalePerYear.push(forcedSaleProceeds);
         const byAcc: Record<string, number> = {};
-        for (const sa of sim.accounts.values())
-          if (sa.node.kind === 'asset') byAcc[sa.node.id] = sa.balance;
+        let embeddedGain = 0;
+        for (const sa of sim.accounts.values()) {
+          if (sa.node.kind !== 'asset') continue;
+          byAcc[sa.node.id] = sa.balance;
+          if (!sa.active) continue;
+          // Step-up only applies to assets whose unrealized gain would
+          // otherwise be subject to capital-gains tax: taxable brokerage,
+          // primary residence, investment property — anything with the
+          // 'taxable' tax_treatment. Tax-deferred (401k/IRA) gets no
+          // step-up; Roth has no embedded gain to step up.
+          const tt = resolveTaxTreatment(sa.node);
+          if (tt && tt !== 'taxable') continue;
+          embeddedGain += Math.max(0, sa.balance - sa.basis);
+        }
         byAccountSeries.push(byAcc);
+        embeddedGainPerYear.push(embeddedGain);
         inflationSeries.push(sim.inflation_index);
       }
     }
@@ -711,6 +725,7 @@ export function project(
       expense_by_source: expenseBySourcePerYear[yi],
       event_liquidation_proceeds: eventLiquidationPerYear[yi],
       forced_sale_proceeds: forcedSalePerYear[yi],
+      embedded_gain: embeddedGainPerYear[yi],
     });
   }
   return out;
