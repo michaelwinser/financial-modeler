@@ -117,26 +117,68 @@ Phases 0–2 were the gate; they are now closed. Phase 3 (taxes/household) and P
 
 ## Phase 3 — Tax model upgrade and household reality
 
-**Goal:** make the tool actually correct for the target user persona's primary jobs.
+Split into 3.0 (tax math + RMDs + filing status, single-actor) and 3.5 (real couples). 3.0 is a week; 3.5 is genuinely another week. The split lets testers exercise correct bracket math against real situations long before the couples machinery lands.
 
-**Why now:** Phase 2 tests are in place, so we can rip into the engine without breaking working users. This is the largest single piece of work in the roadmap and the most consequential — *the* gap between "demo" and "trustworthy planning tool." It's also a prerequisite for Phase 4: bracket placement views, RMD impact analyses, and lifetime-tax breakdowns all depend on bracket-aware numbers.
+### Phase 3.0 — Brackets, RMDs, account types, filing status
+
+**Goal:** make the tool correct for the target user persona's primary jobs, *for a single filer or someone modeling MFJ-as-one-actor*.
+
+**Why now:** Phase 2 tests are in place, so we can rip into the engine without breaking working users. This is also a prerequisite for Phase 4 — bracket placement views, RMD impact analyses, and lifetime-tax breakdowns all depend on bracket-aware numbers.
 
 **Deliverables:**
-- **Federal tax tables.** Bracket-based ordinary income, LTCG/qualified dividends. Data, not code (JSON or per-jurisdiction account fields). User-editable so non-US plug-ins work.
-- **State tax tables.** Small library of common states (CA, FL, NY, TX, WA, MA, …) shipped as defaults; user can edit or add.
-- **IRMAA tiers** based on MAGI.
-- **`tax_deductible: bool` flag** on expense accounts (now safe with brackets — was deferred from Phase 0.5 for this reason).
-- **RMD auto-events** derived from tax-deferred accounts when `current_age >= 73`. Uses the IRS Uniform Lifetime Table. Per-account `subject_to_rmd` flag, defaulting from `tax_treatment === 'tax_deferred'` so Roth 401(k) exceptions are explicit.
-- **Step-up basis at horizon** (one primitive; tiny diff).
-- **Couple / joint MFJ** with two `Actor`s, each with their own age, SS stream, RMD schedule, life-expectancy horizon. Survivor mechanics via an explicit "death of spouse" event in V1; richer survivor logic deferred to a 3.5 if it gets complex.
+
+- **`account_type` enum** on `AccountNode`. Initial set: `taxable_brokerage`, `traditional_401k` (covers 401k/403b/457b/traditional IRA/SEP/SIMPLE), `roth_account` (covers Roth IRA + Roth 401k since SECURE 2.0), `municipal_bond`, `cash`, `pension`, `primary_residence`, `investment_property`. The existing `tax_treatment` becomes a *derived* value from `account_type`, override-able. `subject_to_rmd` is also derived (true for `traditional_401k`; false elsewhere unless overridden).
+- **Federal tax tables** as fields on jurisdiction ambients: `federal_brackets_ordinary`, `federal_brackets_ltcg`, configurable per filing status. User-editable so non-US plug-ins work. Schema and a curated default federal-2025 table shipped as data.
+- **State tax tables** as fields on each state ambient (CA, FL, NY, TX, WA, MA shipped as defaults; user can add).
+- **IRMAA tiers** based on MAGI, on the federal ambient.
+- **`actor.filing_status: 'single' | 'mfj'`** for tax-table selection. No second actor yet — this is the "one actor, MFJ filing" simplification.
+- **`tax_deductible: bool`** flag on expense accounts (deferred from Phase 0.5 for this reason — now safe).
+- **RMD auto-events** synthesized from `account_type === 'traditional_401k'` (or the explicit override) when `current_age >= 73`, using the IRS Uniform Lifetime Table. Same auto-event pattern as `end_account` from `end_age` — derived at projection time, marked `auto_generated`, read-only in the inspector.
+- **Step-up basis at horizon** — one primitive (`cost_basis = balance` for taxable assets at `actor.horizon_age`).
+
+**Engine refactor scope:**
+- Replace single `effective_tax_rate × amount` with bracket-walking math for ordinary income and LTCG separately.
+- Replace the 0.6-of-ordinary LTCG proxy with real LTCG brackets.
+- IRMAA premiums computed from MAGI tier.
+- The RMD synthesizer is a peer of `synthesizeAutoEvents`.
+
+**UI surface:**
+- `account_type` picker in the AccountInspector (replaces the explicit `tax_treatment` input; an "advanced override" expands the underlying flags).
+- Filing-status picker in the ActorInspector.
+- Bracket-table editor in each jurisdiction's inspector (a small table view, editable).
+- IRMAA-tier editor in the federal ambient's inspector.
+- `tax_deductible` toggle on expense inspector.
 
 **Exit criteria:**
-- The "FL move" use case reflects real federal+state bracket math, not a single effective rate.
-- The "Roth ladder" use case shows the conversion's effect on future bracket placement, not just blended-rate savings.
-- A couples scenario produces sensible joint filing taxes, two RMD schedules, and survivor-stage projections.
+- The "FL move" use case reflects real federal+state bracket math, not a single effective rate. Lifetime-tax delta is meaningfully different from today's blended-rate calculation.
+- The "Roth ladder" use case correctly shows the conversion's effect on future bracket placement (i.e., conversion-year ordinary income lands at marginal brackets, not a flat blend).
+- The seed scenario at age 73+ produces non-zero RMD auto-events for `traditional_401k` accounts.
+- A user with a `municipal_bond` account sees no federal tax on its interest.
 - All Phase 2 tests still pass (with snapshot updates for the new math, reviewed and intentional).
 
 **Effort:** large. Probably a week.
+
+### Phase 3.5 — Real couples (two actors)
+
+**Goal:** household modeling with two distinct individuals — separate ages, separate SS streams, individual vs joint account ownership, survivor stage.
+
+**Why deferred to 3.5:** the conceptual model is straightforward but the UI surface is meaningful (owner badge per account, per-actor age tracking, RMD doubling, death-of-spouse event with survivor mechanics). Worth shipping 3.0 first so single-filer users get correct numbers immediately and we can validate bracket math before adding household complexity.
+
+**Deliverables:**
+
+- **Second `Actor`** in the schema. `Actor[]` rather than singleton; each has its own `current_age`, `scenario_name` becomes household-level.
+- **`account.owners: actor_id[]`** — defaults to `[primary]` for back-compat. `owners.length > 1` means joint ownership.
+- **Per-actor stream ownership.** Income/expense streams gain an `owner` field (which actor's age drives `start_age` / `end_age`, and whose RMD obligations are involved).
+- **Per-actor RMD schedule** — synthesizer fires for each actor's tax-deferred holdings at *their* age 73.
+- **Death-of-spouse event** as a first-class action. On trigger: surviving spouse takes ownership of joint and decedent-owned accounts; surviving SS becomes the larger of the two streams; filing status flips from MFJ to single from that age forward.
+- **UI:** owner badges on tree rows; per-spouse income inspectors; "whose age?" indicator in chart hovers, tooltips, and timeline rows.
+
+**Exit criteria:**
+- A couples scenario produces sensible joint filing taxes, two RMD schedules, and a survivor-stage projection.
+- Filing status transitions correctly at the death event.
+- All Phase 2 + 3.0 tests still pass.
+
+**Effort:** large. Probably another week.
 
 ---
 
@@ -217,3 +259,4 @@ These should be considered at every phase but don't have a single completion poi
 ## Roadmap history
 
 - The original Phase 3 was "Multi-scenario + compare" as a standalone step. After Phase 2 closed, we recognized that compare belongs to a larger "analysis" surface that also needs intra-plan tools (sensitivity sliders, year drill-down, bracket placement, RMD impact, lifetime-tax breakdowns). Compare alone would be a narrow feature that gets reworked when those land. So the original Phase 3 was rolled into the new Phase 4 (Analysis), tax/household work was promoted from Phase 4 to Phase 3, and the ordering was flipped to land bracket-aware numbers before the analytical layer that depends on them.
+- Phase 3 was subsequently split into 3.0 (single-actor brackets + RMDs + filing status + step-up basis + account types) and 3.5 (real two-actor couples). The tax-correctness milestone is a week of work; couples adds another week of UI surface (owner badges, per-actor schedules, death event, survivor stage). Splitting lets testers validate bracket math against real situations long before the couples machinery lands.
