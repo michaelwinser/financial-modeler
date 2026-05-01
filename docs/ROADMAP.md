@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Status:** Phases 0, 0.5, 1, 2, and 3.0 are complete. The schema, engine, UX patterns, documentation, and test suite are settled; bracket-walking taxes, RMD synthesis, IRMAA, account types, filing status, tax-deductible expenses, and the step-up tracker are all live. Code lives in `mocks/main-view/`. Production deployment via `Dockerfile` + `docker-compose.yaml` (publishes to GHCR on push). 95 tests at ~3 s. **In progress:** Phase 3.5 (real two-actor couples).
+> **Status:** Phases 0, 0.5, 1, 2, 3.0, and 3.5 are complete. The household model (Actor[] + per-actor ages + death-of-spouse), bracket-walking taxes, RMD synthesis, IRMAA, account types, filing status, tax-deductible expenses, and the step-up tracker are all live. Code lives in `mocks/main-view/`. Production deployment via `Dockerfile` + `docker-compose.yaml` (publishes to GHCR on push). 102 tests at ~3 s. **Next:** Phase 4 (Analysis — inter-plan compare + intra-plan drill-downs).
 
 ## Phasing principle
 
@@ -160,7 +160,7 @@ Split into 3.0 (tax math + RMDs + filing status, single-actor) and 3.5 (real cou
 
 **Carry-over to a future phase:** the bracket-table editor and IRMAA-tier editor in the jurisdiction inspector were not built — bracket tables are currently edited via the seed file or JSON import. The federal-2025 and CA defaults shipped are sufficient for the canonical use cases; the editor is deferred until Phase 4 (Analysis) when bracket-placement views will give it natural surface area.
 
-### Phase 3.5 — Real couples (two actors)
+### Phase 3.5 — Real couples (two actors) ✅ Complete
 
 **Goal:** household modeling with two distinct individuals — separate ages, separate SS streams, individual vs joint account ownership, survivor stage.
 
@@ -181,6 +181,8 @@ Split into 3.0 (tax math + RMDs + filing status, single-actor) and 3.5 (real cou
 - All Phase 2 + 3.0 tests still pass.
 
 **Effort:** large. Probably another week.
+
+**Carry-over to a future phase:** SS-survivor benefit auto-bump (the larger of the two streams continues post-death) is not modeled — users encode it manually by editing the surviving spouse's SS amount or via a `set_value` event. The simplification is fine because the engine cleanly separates "stream owner" from "stream amount"; the bump is a one-line scenario edit rather than a missing primitive. Schema migration for v1 localStorage state is one-way (no in-place migration; the persist middleware auto-downloads a v1 backup, then resets to seed; `importScenarioJson` accepts v1 payloads).
 
 ---
 
