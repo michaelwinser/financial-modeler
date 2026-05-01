@@ -1,0 +1,33 @@
+mocks/main-view/src/store.ts
+  bf3513e6ff782546 13,513-536
+mocks/main-view/src/types.ts
+  bf3513e6ff782546 132-133
+mocks/main-view/src/engine.ts
+  bf3513e6ff782546 20,320,393-407,414-419,424,641
+mocks/main-view/src/engine.test.ts
+  bf3513e6ff782546 377-438
+mocks/main-view/src/store.autoEvents.test.ts
+  bf3513e6ff782546 131-193
+mocks/main-view/src/tax.ts
+  bf3513e6ff782546 164-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7a5ce8d032ab0e744f1c66883c0ddda377dbd9db",
+  "prompts": {
+    "bf3513e6ff782546": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab66ecec-cd22-4d2e-bc79-942637fa7049",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Michael Winser",
+      "messages": [],
+      "total_additions": 1980,
+      "total_deletions": 4,
+      "accepted_lines": 30830,
+      "overriden_lines": 0
+    }
+  }
+}
