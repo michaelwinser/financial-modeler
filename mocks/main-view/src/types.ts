@@ -3,6 +3,32 @@
 // in a single tree. Inheritance follows the parent chain.
 // =====================================================================
 
+// Tax-table data types. Logic (compute/walk/IRMAA) lives in tax.ts.
+export interface Bracket {
+  from: number;
+  rate: number;
+}
+
+export type BracketTable = Bracket[];
+
+// Per-filing-status bracket tables. A jurisdiction ambient publishes one
+// of these for each tax kind it supports. The engine selects the right
+// inner array via actor.filing_status.
+export interface BracketTablesByStatus {
+  single?: BracketTable;
+  mfj?: BracketTable;
+}
+
+export interface IrmaaTier {
+  from: number;
+  surcharge_annual: number;
+}
+
+export interface IrmaaTiersByStatus {
+  single?: IrmaaTier[];
+  mfj?: IrmaaTier[];
+}
+
 export type AccountKind =
   | 'category' // structural grouping; no balance of its own
   | 'ambient' // ambient/economic value (e.g., equity_yield, inflation, jurisdiction)
@@ -75,7 +101,16 @@ export interface AccountNode {
   start_value?: number;
   yield_rate?: FieldValue; // explicit override on a specific asset
   cost_basis?: number; // for taxable assets
-  effective_tax_rate?: FieldValue; // for income / withdrawals
+  effective_tax_rate?: FieldValue; // legacy single-rate fallback; superseded by bracket tables when present
+  // Bracket-based tax tables on jurisdiction ambients. Federal brackets
+  // typically live on a Federal-Tax parent ambient and are inherited by
+  // state children. State-level fields live on each state ambient. All
+  // are optional; engine falls back to effective_tax_rate when missing.
+  federal_brackets_ordinary?: BracketTablesByStatus;
+  federal_brackets_ltcg?: BracketTablesByStatus;
+  state_brackets_ordinary?: BracketTablesByStatus;
+  state_brackets_ltcg?: BracketTablesByStatus;
+  irmaa_tiers?: IrmaaTiersByStatus;
   // For income/expense streams:
   start_age?: number;
   end_age?: number;

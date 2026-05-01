@@ -10,7 +10,17 @@
 // so scenarios without populated tables fall back to the legacy
 // effective_tax_rate × amount path.
 
-import type { AccountNode, AccountType, FilingStatus, TaxTreatment } from './types';
+import type {
+  AccountNode,
+  AccountType,
+  BracketTable,
+  FilingStatus,
+  IrmaaTier,
+  TaxTreatment,
+} from './types';
+
+// Re-export the data types for callers who only want this file.
+export type { Bracket, BracketTable, IrmaaTier } from './types';
 
 // ---------- Account-type derivations ---------------------------------------
 
@@ -87,13 +97,6 @@ export function qualifiesForHomeSaleExclusion(node: AccountNode): boolean {
 // by filing_status when the engine computes tax. The bracket-walking
 // computeTax() returns total tax owed on the given taxable amount.
 
-export interface Bracket {
-  from: number;
-  rate: number;
-}
-
-export type BracketTable = Bracket[];
-
 // Apply a bracket schedule to a taxable amount. Standard progressive math:
 // each dollar in bracket k pays bracket k's rate.
 export function computeTax(taxable: number, brackets: BracketTable): number {
@@ -137,11 +140,6 @@ export function dollarsToNextBracket(taxable: number, brackets: BracketTable): n
 // surcharges based on MAGI. Single threshold table per filing status, on
 // the federal ambient. A tier is { from: MAGI threshold, surcharge: $/yr }.
 // Engine adds the surcharge for the tier the actor's MAGI falls into.
-
-export interface IrmaaTier {
-  from: number;
-  surcharge_annual: number;
-}
 
 export function computeIrmaaSurcharge(magi: number, tiers: IrmaaTier[]): number {
   if (magi <= 0 || tiers.length === 0) return 0;
