@@ -1,6 +1,25 @@
 import type { ReactNode } from 'react';
 import { useAllEvents, useStore } from '../store';
-import type { AccountNode, ActionTemplate, FieldValue, TimelineEvent } from '../types';
+import type {
+  AccountNode,
+  AccountType,
+  ActionTemplate,
+  FieldValue,
+  FilingStatus,
+  TimelineEvent,
+} from '../types';
+import { resolveSubjectToRmd, resolveTaxTreatment } from '../tax';
+
+const ACCOUNT_TYPE_OPTIONS: Array<{ value: AccountType; label: string }> = [
+  { value: 'taxable_brokerage', label: 'Taxable brokerage' },
+  { value: 'traditional_401k', label: 'Traditional 401(k) / IRA' },
+  { value: 'roth_account', label: 'Roth (IRA / 401k)' },
+  { value: 'municipal_bond', label: 'Municipal bond' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'pension', label: 'Pension (use kind=income)' },
+  { value: 'primary_residence', label: 'Primary residence' },
+  { value: 'investment_property', label: 'Investment property' },
+];
 
 const fmtPct = (v: number): string => `${(v * 100).toFixed(1)}%`;
 const fmtMoney = (v: number): string =>
@@ -197,6 +216,41 @@ function AccountInspector({ node }: { node: AccountNode }) {
         <>
           <div className="ifield">
             <div className="ifield-row">
+              <span className="ifield-label">Account type</span>
+              <span className={`ifield-value ${node.account_type ? 'explicit' : 'inherited'}`}>
+                {(() => {
+                  const tt = resolveTaxTreatment(node);
+                  const rmd = resolveSubjectToRmd(node);
+                  return tt ? `${tt}${rmd ? ' · RMD' : ''}` : 'unset';
+                })()}
+              </span>
+            </div>
+            <select
+              className="i-select"
+              value={node.account_type ?? ''}
+              onChange={(e) =>
+                setAccountField(
+                  node.id,
+                  'account_type',
+                  (e.target.value || undefined) as AccountType | undefined,
+                )
+              }
+              aria-label="Account type"
+            >
+              <option value="">— unset —</option>
+              {ACCOUNT_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="muted small" style={{ marginTop: 4 }}>
+              Drives derived <code>tax_treatment</code> and RMD eligibility. Override
+              via the explicit fields below if needed.
+            </p>
+          </div>
+          <div className="ifield">
+            <div className="ifield-row">
               <span className="ifield-label">Custodian / tag</span>
             </div>
             <input
@@ -344,6 +398,32 @@ function AccountInspector({ node }: { node: AccountNode }) {
               }
             />
           )}
+          {node.kind === 'expense' && (
+            <div className="ifield">
+              <div className="ifield-row">
+                <span className="ifield-label">Tax deductible</span>
+                <span className={`ifield-value ${node.tax_deductible ? 'explicit' : 'inherited'}`}>
+                  {node.tax_deductible ? 'yes' : 'no'}
+                </span>
+              </div>
+              <div className="ifield-actions">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={node.tax_deductible ?? false}
+                    onChange={(e) =>
+                      setAccountField(node.id, 'tax_deductible', e.target.checked || undefined)
+                    }
+                  />
+                  reduces ordinary taxable income
+                </label>
+              </div>
+              <p className="muted small" style={{ marginTop: 4 }}>
+                For mortgage interest, charitable giving, etc. V1 treats this as a
+                dollar-for-dollar reduction; standard-vs-itemized isn't modeled.
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -363,6 +443,7 @@ function EventInspector({ event }: { event: TimelineEvent }) {
   if (event.auto_generated) {
     const sourceId = event.attached_account_ids[0];
     const source = sourceId ? accounts.find((a) => a.id === sourceId) : undefined;
+    const actionType = event.actions[0]?.type;
     return (
       <div className="inspector-body">
         <div className="inspector-head">
@@ -376,7 +457,12 @@ function EventInspector({ event }: { event: TimelineEvent }) {
         </div>
         <div className="ifield-row">
           <span className="ifield-label">Trigger age</span>
-          <span className="ifield-value explicit">{event.trigger_age}</span>
+          <span className="ifield-value explicit">
+            {event.trigger_age}
+            {event.end_age !== undefined && event.end_age !== event.trigger_age
+              ? `–${event.end_age}`
+              : ''}
+          </span>
         </div>
         {source && (
           <button
@@ -386,10 +472,18 @@ function EventInspector({ event }: { event: TimelineEvent }) {
             Open source account → {source.name}
           </button>
         )}
-        <p className="muted small" style={{ marginTop: 8 }}>
-          To change when this fires, edit the source account's <code>end_age</code>.
-          To remove it, clear that field. To customize behavior, create a separate event.
-        </p>
+        {actionType === 'rmd' ? (
+          <p className="muted small" style={{ marginTop: 8 }}>
+            Auto-generated for any account whose derived <code>subject_to_rmd</code> is
+            true (typically traditional 401(k)/IRA). To suppress, set
+            <code> subject_to_rmd: false</code> on the source account.
+          </p>
+        ) : (
+          <p className="muted small" style={{ marginTop: 8 }}>
+            To change when this fires, edit the source account's <code>end_age</code>.
+            To remove it, clear that field. To customize behavior, create a separate event.
+          </p>
+        )}
       </div>
     );
   }
@@ -537,6 +631,7 @@ function ActionsEditor({ event }: { event: TimelineEvent }) {
               <option value="set_value">set_value</option>
               <option value="reparent">reparent</option>
               <option value="end_account">end_account</option>
+              <option value="rmd">rmd</option>
             </select>
             <button
               className="action-remove"
@@ -644,6 +739,13 @@ function ActionsEditor({ event }: { event: TimelineEvent }) {
                 Marks attached income/expense accounts as inactive at the trigger age.
               </p>
             )}
+            {a.type === 'rmd' && (
+              <p className="action-hint muted small">
+                Withdraws the IRS Uniform Lifetime amount (balance ÷ age divisor)
+                from the attached tax-deferred account each year. Auto-generated
+                for traditional 401(k)/IRA accounts; rarely added by hand.
+              </p>
+            )}
           </div>
         </div>
       ))}
@@ -702,6 +804,27 @@ function ActorInspector() {
           setActorField('horizon_age', (v as number | undefined) ?? actor.horizon_age)
         }
       />
+      <div className="ifield">
+        <div className="ifield-row">
+          <span className="ifield-label">Filing status</span>
+          <span className="ifield-value explicit">{actor.filing_status ?? 'single'}</span>
+        </div>
+        <select
+          className="i-select"
+          value={actor.filing_status ?? 'single'}
+          onChange={(e) =>
+            setActorField('filing_status', e.target.value as FilingStatus)
+          }
+          aria-label="Filing status"
+        >
+          <option value="single">Single</option>
+          <option value="mfj">Married filing jointly</option>
+        </select>
+        <p className="muted small" style={{ marginTop: 4 }}>
+          Selects which bracket table is used on the active jurisdiction's
+          federal/state schedules.
+        </p>
+      </div>
       <div className="ifield">
         <div className="ifield-row">
           <span className="ifield-label">Cash sink</span>

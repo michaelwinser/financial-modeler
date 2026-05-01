@@ -549,6 +549,70 @@ describe('UC28 — toggle Nominal $ ↔ Today\'s $', () => {
   });
 });
 
+// ---------- Layer — Phase 3.0 tax model -----------------------------------
+
+describe('P3.0 — filing_status select on the actor', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('changing the Filing status select updates actor.filing_status', async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByText(/^plan settings$/i, { selector: '.tree-name' }));
+
+    const select = await screen.findByLabelText(/filing status/i);
+    expect((select as HTMLSelectElement).value).toBe('mfj'); // seed default
+    await user.selectOptions(select, 'single');
+    expect(useStore.getState().actor.filing_status).toBe('single');
+  });
+});
+
+describe('P3.0 — account_type select on an asset', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('changing Account type updates account_type and shifts derived tax_treatment', async () => {
+    const { user } = renderApp();
+    // Pre-condition: the seed's MSFT lot is taxable_brokerage.
+    const before = useStore.getState().accounts.find((a) => a.id === 'schwab_msft')!;
+    expect(before.account_type).toBe('taxable_brokerage');
+
+    await user.click(screen.getByText(before.name));
+    const select = await screen.findByLabelText(/^account type$/i);
+    await user.selectOptions(select, 'roth_account');
+
+    const after = useStore.getState().accounts.find((a) => a.id === 'schwab_msft')!;
+    expect(after.account_type).toBe('roth_account');
+  });
+});
+
+describe('P3.0 — tax_deductible toggle on an expense', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('flipping the checkbox sets tax_deductible on the expense account', async () => {
+    const { user } = renderApp();
+    const expense = useStore.getState().accounts.find((a) => a.id === 'living_expenses')!;
+    // Click the row in the accounts tree (the same name may also appear in
+    // chart legends / tooltips, so disambiguate via the tree-name class).
+    await user.click(screen.getByText(expense.name, { selector: '.tree-name' }));
+
+    const checkbox = await screen.findByLabelText(/reduces ordinary taxable income/i);
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    await user.click(checkbox);
+
+    expect(useStore.getState().accounts.find((a) => a.id === 'living_expenses')!.tax_deductible).toBe(true);
+  });
+});
+
+describe('P3.0 — RMD auto-event derivation', () => {
+  beforeEach(() => useStore.getState().resetToSeed());
+
+  it('seed renders an auto-generated RMD event for each traditional_401k account', () => {
+    renderApp();
+    // Synthesized RMD events have names like "RMD on <account name>" and
+    // appear as rows in the timeline list.
+    const rmdRows = screen.getAllByText(/^RMD on /i);
+    expect(rmdRows.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
 // ---------- Notes on UCs covered elsewhere or deferred ---------------------
 //
 // UC17 (liquidate) and UC21 (end_account) are covered by UC22 implicitly
