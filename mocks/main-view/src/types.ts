@@ -129,7 +129,8 @@ export type ActionType =
   | 'transfer' // move money between two accounts
   | 'liquidate' // sell asset; basis to ordinary tax, gains to LTCG, cash to sink
   | 'reparent' // change an account's parent (e.g., jurisdiction switch)
-  | 'end_account'; // mark account inactive at this age
+  | 'end_account' // mark account inactive at this age
+  | 'rmd'; // dynamically-sized withdrawal from a tax-deferred account using the IRS Uniform Lifetime Table
 
 export interface ActionTemplate {
   type: ActionType;

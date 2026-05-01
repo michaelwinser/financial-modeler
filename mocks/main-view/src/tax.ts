@@ -161,3 +161,41 @@ export interface TaxContext {
   stateLtcg: BracketTable; // many states tax LTCG as ordinary; mirror federal_ordinary if so
   irmaaTiers: IrmaaTier[];
 }
+
+// ---------- RMDs ------------------------------------------------------------
+//
+// IRS Uniform Lifetime Table (the post-SECURE-Act / 2022+ figures).
+// RMD = prior-year-end balance / divisor. Used for tax-deferred accounts
+// once the account holder reaches age 73. Applies to traditional 401(k),
+// 403(b), 457(b), traditional IRA, SEP/SIMPLE IRA. Roth IRAs were always
+// exempt; Roth 401(k)s became exempt under SECURE 2.0 (effective 2024).
+
+const UNIFORM_LIFETIME_TABLE: Record<number, number> = {
+  73: 26.5, 74: 25.5, 75: 24.6, 76: 23.7, 77: 22.9, 78: 22.0, 79: 21.1,
+  80: 20.2, 81: 19.4, 82: 18.5, 83: 17.7, 84: 16.8, 85: 16.0, 86: 15.2,
+  87: 14.4, 88: 13.7, 89: 12.9, 90: 12.2, 91: 11.5, 92: 10.8, 93: 10.1,
+  94: 9.5,  95: 8.9,  96: 8.4,  97: 7.8,  98: 7.3,  99: 6.8,  100: 6.4,
+  101: 6.0, 102: 5.6, 103: 5.2, 104: 4.9, 105: 4.6, 106: 4.3, 107: 4.1,
+  108: 3.9, 109: 3.7, 110: 3.5, 111: 3.4, 112: 3.3, 113: 3.1, 114: 3.0,
+  115: 2.9, 116: 2.8, 117: 2.7, 118: 2.5, 119: 2.3, 120: 2.0,
+};
+
+// Returns the divisor for a given age (≥73), or undefined if no RMD applies.
+// For ages above the table's range, returns the smallest divisor (most
+// aggressive distribution) — IRS practice for centenarians+.
+export function uniformLifetimeDivisor(age: number): number | undefined {
+  if (age < 73) return undefined;
+  const direct = UNIFORM_LIFETIME_TABLE[age];
+  if (direct !== undefined) return direct;
+  if (age > 120) return UNIFORM_LIFETIME_TABLE[120];
+  // Shouldn't hit; integer ages 73-120 are all populated. Defensive fallback.
+  return UNIFORM_LIFETIME_TABLE[120];
+}
+
+// Compute the RMD amount for a tax-deferred balance at a given age.
+// Returns 0 if the account isn't subject to RMDs at this age.
+export function computeRmd(balance: number, age: number): number {
+  const divisor = uniformLifetimeDivisor(age);
+  if (divisor === undefined || balance <= 0) return 0;
+  return balance / divisor;
+}

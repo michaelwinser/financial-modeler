@@ -17,6 +17,7 @@ import {
   computeTax,
   marginalRate,
   resolveTaxTreatment,
+  uniformLifetimeDivisor,
 } from './tax';
 
 // =====================================================================
@@ -316,6 +317,7 @@ function applyAction(
   attachedId: string,
   action: ActionTemplate,
   acc_tax: YearAccumulator,
+  age: number,
 ): ActionResult {
   const r = emptyActionResult();
 
@@ -388,18 +390,38 @@ function applyAction(
     acc.balance = 0;
     acc.basis = 0;
     acc.active = false;
+  } else if (action.type === 'rmd') {
+    // Required Minimum Distribution: divide prior-end balance by the IRS
+    // Uniform Lifetime Table divisor for the current age. Amount is
+    // ordinary income; cash flows gross to the sink (year-end bracket
+    // walk handles the tax). No-op below age 73 — synthesizer fires the
+    // event each year ≥73, but a hand-attached event before then would
+    // simply do nothing rather than throw.
+    const divisor = uniformLifetimeDivisor(age);
+    if (divisor !== undefined && acc.balance > 0) {
+      const amt = Math.min(acc.balance / divisor, acc.balance);
+      acc.balance -= amt;
+      const cash = sim.accounts.get('cash_reserves');
+      if (cash) cash.balance += amt;
+      acc_tax.ordinary_income += amt;
+    }
   }
   // reparent is handled above the `if (!acc) return r` early return so
   // that attached_account_ids === [] events still take effect.
   return r;
 }
 
-function applyEvent(sim: SimState, event: TimelineEvent, acc_tax: YearAccumulator): ActionResult {
+function applyEvent(
+  sim: SimState,
+  event: TimelineEvent,
+  acc_tax: YearAccumulator,
+  age: number,
+): ActionResult {
   const out = emptyActionResult();
   const ids = event.attached_account_ids.length > 0 ? event.attached_account_ids : [''];
   for (const id of ids) {
     for (const a of event.actions) {
-      const r = applyAction(sim, event, id, a, acc_tax);
+      const r = applyAction(sim, event, id, a, acc_tax, age);
       out.liquidationProceeds += r.liquidationProceeds;
     }
   }
@@ -616,7 +638,7 @@ export function project(
       if (label === 'baseline') eventsPerYear[yi] = triggered;
       let yearLiquidation = 0;
       for (const e of triggered) {
-        const r = applyEvent(sim, e, acc_tax);
+        const r = applyEvent(sim, e, acc_tax, age);
         yearLiquidation += r.liquidationProceeds;
       }
 

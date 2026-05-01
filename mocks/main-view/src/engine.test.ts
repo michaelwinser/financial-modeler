@@ -374,6 +374,68 @@ describe('engine action: reparent', () => {
 
 // ---------- end_account action ----------------------------------------------
 
+describe('engine action: rmd', () => {
+  it('withdraws balance/divisor at age 73 and adds it as ordinary income', () => {
+    // 73 → divisor 26.5 → RMD = 1_000_000 / 26.5 ≈ 37_736
+    // Tax at flat 30% on 37_736 ≈ 11_321
+    const accounts = [
+      ...baseAccounts(),
+      asset('ira', 'us', {
+        asset_class: 'cash', // 0 yield to keep arithmetic clean
+        tax_treatment: 'tax_deferred',
+        start_value: 1_000_000,
+      }),
+    ];
+    const events = [event({
+      id: 'rmd',
+      kind: 'recurring',
+      trigger_age: 73,
+      end_age: 75,
+      attached_account_ids: ['ira'],
+      actions: [{ type: 'rmd' }],
+    })];
+    const result = project(
+      accounts,
+      actor({ current_age: 73, horizon_age: 73 }),
+      events,
+    );
+    const expectedRmd = 1_000_000 / 26.5;
+    // The RMD amount should leave the account.
+    expect(result[0].by_account['ira']).toBeCloseTo(1_000_000 - expectedRmd, 0);
+    // And be taxed as ordinary income at the flat 30%.
+    expect(result[0].tax_ordinary).toBeCloseTo(expectedRmd * 0.30, 0);
+    // Cash receives the gross RMD; year-end tax is paid out of cash.
+    expect(result[0].by_account['cash_reserves']).toBeCloseTo(
+      expectedRmd - expectedRmd * 0.30,
+      0,
+    );
+  });
+
+  it('is a no-op below age 73', () => {
+    const accounts = [
+      ...baseAccounts(),
+      asset('ira', 'us', {
+        asset_class: 'cash',
+        tax_treatment: 'tax_deferred',
+        start_value: 1_000_000,
+      }),
+    ];
+    const events = [event({
+      id: 'early_rmd',
+      trigger_age: 70,
+      attached_account_ids: ['ira'],
+      actions: [{ type: 'rmd' }],
+    })];
+    const result = project(
+      accounts,
+      actor({ current_age: 70, horizon_age: 70 }),
+      events,
+    );
+    expect(result[0].by_account['ira']).toBeCloseTo(1_000_000, 0);
+    expect(result[0].tax_ordinary).toBeCloseTo(0, 0);
+  });
+});
+
 describe('engine action: end_account', () => {
   it('marks an income stream inactive at the trigger age', () => {
     const accounts = [

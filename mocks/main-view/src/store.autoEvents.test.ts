@@ -128,3 +128,66 @@ describe('synthesizeAutoEvents', () => {
     expect(auto[0].auto_generated).toBe(true);
   });
 });
+
+function asset(over: Partial<AccountNode> & Pick<AccountNode, 'id'>): AccountNode {
+  return {
+    name: over.id,
+    kind: 'asset',
+    parent_id: 'us',
+    asset_class: 'equity',
+    start_value: 1_000_000,
+    ...over,
+  };
+}
+
+describe('synthesizeAutoEvents: RMDs', () => {
+  it('generates a recurring rmd event for a traditional_401k account', () => {
+    const accounts = [asset({ id: 'ira', account_type: 'traditional_401k' })];
+    const auto = synthesizeAutoEvents(accounts, actor({ horizon_age: 95 }));
+    const rmd = auto.find((e) => e.id === 'auto_rmd_ira');
+    expect(rmd).toBeDefined();
+    expect(rmd!.kind).toBe('recurring');
+    expect(rmd!.trigger_age).toBe(73);
+    expect(rmd!.end_age).toBe(95);
+    expect(rmd!.attached_account_ids).toEqual(['ira']);
+    expect(rmd!.actions).toEqual([{ type: 'rmd' }]);
+    expect(rmd!.auto_generated).toBe(true);
+  });
+
+  it('does NOT generate an rmd event for a Roth, taxable, or muni account', () => {
+    const accounts = [
+      asset({ id: 'roth', account_type: 'roth_account' }),
+      asset({ id: 'brk', account_type: 'taxable_brokerage' }),
+      asset({ id: 'muni', account_type: 'municipal_bond' }),
+    ];
+    const auto = synthesizeAutoEvents(accounts, actor());
+    expect(auto.filter((e) => e.id.startsWith('auto_rmd_'))).toHaveLength(0);
+  });
+
+  it('respects an explicit subject_to_rmd: false override on a traditional_401k', () => {
+    const accounts = [
+      asset({ id: 'ira_inherited', account_type: 'traditional_401k', subject_to_rmd: false }),
+    ];
+    const auto = synthesizeAutoEvents(accounts, actor());
+    expect(auto.find((e) => e.id === 'auto_rmd_ira_inherited')).toBeUndefined();
+  });
+
+  it('skips RMD synthesis entirely when horizon_age < 73', () => {
+    const accounts = [asset({ id: 'ira', account_type: 'traditional_401k' })];
+    const auto = synthesizeAutoEvents(accounts, actor({ current_age: 50, horizon_age: 70 }));
+    expect(auto.filter((e) => e.id.startsWith('auto_rmd_'))).toHaveLength(0);
+  });
+
+  it('generates one rmd event per qualifying account', () => {
+    const accounts = [
+      asset({ id: 'ira1', account_type: 'traditional_401k' }),
+      asset({ id: 'ira2', account_type: 'traditional_401k' }),
+      asset({ id: 'roth', account_type: 'roth_account' }),
+    ];
+    const auto = synthesizeAutoEvents(accounts, actor());
+    expect(auto.filter((e) => e.id.startsWith('auto_rmd_')).map((e) => e.id).sort()).toEqual([
+      'auto_rmd_ira1',
+      'auto_rmd_ira2',
+    ]);
+  });
+});

@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { project } from './engine';
 import { seedAccounts, seedActor, seedEvents } from './seed';
+import { resolveSubjectToRmd } from './tax';
 
 const STORAGE_KEY = 'financial-modeler-v1';
 const SCHEMA_VERSION = 1;
@@ -508,6 +509,30 @@ function computeAutoEvents(
       actions: [{ type: 'end_account' }],
       auto_generated: true,
     });
+  }
+  // RMD events: one recurring event per RMD-subject asset, ages 73 →
+  // horizon. The amount is computed dynamically by the engine each year
+  // from current balance × Uniform Lifetime Table divisor — we just
+  // trigger the action, no parameters. Accounts with subject_to_rmd
+  // explicitly false (or derived false from account_type) are skipped.
+  const rmdStart = 73;
+  if (actor.horizon_age >= rmdStart) {
+    for (const a of accounts) {
+      if (a.kind !== 'asset') continue;
+      if (!resolveSubjectToRmd(a)) continue;
+      out.push({
+        id: `auto_rmd_${a.id}`,
+        name: `RMD on ${a.name.toLowerCase()}`,
+        description: `Auto-generated from ${a.name}.subject_to_rmd. IRS Uniform Lifetime Table; starts at age ${rmdStart}.`,
+        trigger_age: rmdStart,
+        end_age: actor.horizon_age,
+        kind: 'recurring',
+        attached_account_ids: [a.id],
+        parameters: {},
+        actions: [{ type: 'rmd' }],
+        auto_generated: true,
+      });
+    }
   }
   return out;
 }
