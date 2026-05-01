@@ -1,10 +1,10 @@
 # Roadmap
 
-> **Status:** Mock #1 complete (event-driven UX, accounts tree, cash-flow chart, action editor). Mock #2 complete (create / delete / auto-events). The architecture from `DESIGN_NOTES.md` is settled. Code lives in `mocks/main-view/`.
+> **Status:** Phases 0, 0.5, 1, and 2 are complete. The schema, engine, UX patterns, documentation, and test suite are settled. Code lives in `mocks/main-view/`. Production deployment via `Dockerfile` + `docker-compose.yaml` (publishes to GHCR on push). 79 tests at ~3 s; engine.ts at 96.83% coverage.
 
 ## Phasing principle
 
-The temptation after a working mock is to start adding big features (taxes, couples, RMDs, scenarios). We are *not* doing that next. Instead:
+The temptation after a working mock is to start adding big features (taxes, couples, RMDs, multi-scenario). We deliberately did *not* do that first. Instead:
 
 > **Document and test before scaling features.**
 
@@ -15,7 +15,7 @@ Reasons:
 - A robust test suite makes a future rewrite (if we choose one) cheap. Without tests, "starting fresh" loses the validated semantics. With tests, a rewrite is a matter of getting the green bar back.
 - Bracket-based taxes, RMDs, and household modeling all touch the engine. Refactoring the engine without engine tests is reckless.
 
-Phases 0–2 are the gate. Phases 3+ build on the gate.
+Phases 0–2 were the gate; they are now closed. Phase 3 (taxes/household) and Phase 4 (Analysis) build on them. The ordering is load-bearing: most of Phase 4's intra-plan insights (bracket placement, RMD impact, lifetime-tax breakdowns) only make sense with bracket-aware numbers, so taxes have to land first.
 
 ---
 
@@ -115,47 +115,65 @@ Phases 0–2 are the gate. Phases 3+ build on the gate.
 
 ---
 
-## Phase 3 — Multi-scenario + compare
-
-**Goal:** ship the killer feature for tax-planning trade-offs.
-
-**Why now:** the engine is pure, so running it twice with different events is mechanically cheap. With Phase 2 tests in place, we can refactor `useProjection` to take a scenario parameter without fearing regressions.
-
-**Deliverables:**
-- `Scenario` model in the store: `{ id, name, accounts, actor, events }`. Multiple scenarios; one active.
-- Topbar dropdown to switch active scenario; "duplicate scenario" / "rename" / "delete" affordances.
-- Compare view: pick two scenarios; chart overlays both baselines (and optionally cones) on one axis. Cash-flow chart can show side-by-side bars or a difference view.
-- Persistence updated to handle multiple scenarios.
-
-**Exit criteria:**
-- User can build "Plan A: no Roth conversion" and "Plan B: Roth ladder 65–72," compare on one chart, see the lifetime-tax delta and terminal net worth delta.
-- All Phase 2 tests still pass; new tests added for compare math.
-
-**Effort:** medium. One session, maybe two.
-
----
-
-## Phase 4 — Tax model upgrade and household reality
+## Phase 3 — Tax model upgrade and household reality
 
 **Goal:** make the tool actually correct for the target user persona's primary jobs.
 
-**Why now:** with tests, scenarios, and persistence in place, we can rip into the engine without breaking working users. This is the largest single piece of work and the most consequential.
+**Why now:** Phase 2 tests are in place, so we can rip into the engine without breaking working users. This is the largest single piece of work in the roadmap and the most consequential — *the* gap between "demo" and "trustworthy planning tool." It's also a prerequisite for Phase 4: bracket placement views, RMD impact analyses, and lifetime-tax breakdowns all depend on bracket-aware numbers.
 
 **Deliverables:**
-- Federal tax tables: bracket-based ordinary income, LTCG/qualified, configurable.
-- State tax tables: small library of common states (CA, FL, NY, TX, WA, MA, …); user can edit or add.
-- IRMAA tiers based on MAGI.
-- `tax_deductible: bool` flag on expense accounts (now safe with brackets).
-- RMD auto-events derived from tax-deferred accounts when `current_age >= 73`. Uses the IRS Uniform Lifetime Table.
-- Step-up basis at horizon (one primitive; tiny diff).
-- Couple / joint MFJ with two `Actor`s, each with their own age, SS stream, RMD schedule, and life-expectancy horizon. Survivor mechanics deferred to a 4.5 if complex.
+- **Federal tax tables.** Bracket-based ordinary income, LTCG/qualified dividends. Data, not code (JSON or per-jurisdiction account fields). User-editable so non-US plug-ins work.
+- **State tax tables.** Small library of common states (CA, FL, NY, TX, WA, MA, …) shipped as defaults; user can edit or add.
+- **IRMAA tiers** based on MAGI.
+- **`tax_deductible: bool` flag** on expense accounts (now safe with brackets — was deferred from Phase 0.5 for this reason).
+- **RMD auto-events** derived from tax-deferred accounts when `current_age >= 73`. Uses the IRS Uniform Lifetime Table. Per-account `subject_to_rmd` flag, defaulting from `tax_treatment === 'tax_deferred'` so Roth 401(k) exceptions are explicit.
+- **Step-up basis at horizon** (one primitive; tiny diff).
+- **Couple / joint MFJ** with two `Actor`s, each with their own age, SS stream, RMD schedule, life-expectancy horizon. Survivor mechanics via an explicit "death of spouse" event in V1; richer survivor logic deferred to a 3.5 if it gets complex.
 
 **Exit criteria:**
-- UC2 (Florida move) reflects real federal+state bracket math, not a single effective rate.
-- UC1 (Roth ladder) shows the conversion's effect on future bracket placement, not just blended-rate savings.
+- The "FL move" use case reflects real federal+state bracket math, not a single effective rate.
+- The "Roth ladder" use case shows the conversion's effect on future bracket placement, not just blended-rate savings.
 - A couples scenario produces sensible joint filing taxes, two RMD schedules, and survivor-stage projections.
+- All Phase 2 tests still pass (with snapshot updates for the new math, reviewed and intentional).
 
 **Effort:** large. Probably a week.
+
+---
+
+## Phase 4 — Analysis
+
+**Goal:** ship the read-only analytical layer of the app — both inter-plan comparison and intra-plan analysis. This is where the tool moves from "model your plan" to "evaluate your plan."
+
+**Why now:** intra-plan insights (bracket placement diagrams, RMD impact, lifetime-tax breakdowns by source) only make sense with bracket-aware numbers from Phase 3. Inter-plan comparison was originally Phase 3 in an earlier roadmap; deferring and rolling it in here lets us build a coherent analysis surface once instead of incrementally bolting on related features.
+
+**Deliverables — inter-plan (multi-scenario compare):**
+- `Scenario[]` in the store: `{ id, name, accounts, actor, events }`. Multiple scenarios; one active for editing.
+- Topbar dropdown to switch active scenario; duplicate / rename / delete affordances.
+- Compare mode: pick two scenarios. Net-worth chart overlays both baselines with shaded gap. Cash-flow chart defaults to a difference view (B − A bars, sign-colored), with a header toggle to view A or B individually. Summary strip becomes deltas. Read-only.
+- Persistence: JSON wraps `{ schemaVersion, scenarios, activeScenarioId }`. Bumps `schemaVersion` to `2`. Migration accepts v1 single-scenario files as a one-element list.
+
+**Deliverables — intra-plan analysis:**
+- **Year drill-down.** Click a year on the chart; right inspector switches to a "Year detail" view showing the full breakdown (income flows, asset sales, taxes by source/bucket, account-by-account changes for that year). Already partially in the cash-flow tooltip; promote to a first-class panel.
+- **Sensitivity sliders.** Slider on key ambient values (equity yield, inflation rate, life expectancy) shows a *ghost* projection alongside the current one in real time. Dropping the slider commits the change; resetting reverts.
+- **Bracket placement view.** For any year, show where ordinary income lands in the federal+state bracket stack. Highlights the *next bracket* and the dollars-to-cliff. Critical for Roth-conversion decisions.
+- **RMD impact analysis.** For each tax-deferred account, project required distributions across the horizon and the cumulative ordinary tax they generate. Compare with vs without configured Roth conversions.
+- **Lifetime tax breakdown.** A pie or stacked-bar by source (ordinary income / LTCG / conversion / event-driven / forced-sale). Exportable as CSV.
+- **Sequence-of-returns stress test.** Apply a configurable shock (e.g., −25% equities) at a chosen age, view the resulting trajectory next to the unshocked baseline. A guided "what-if" rather than a permanent event.
+- **Goal-seeking** (stretch). "What's the maximum sustainable annual spending given my assets and assumptions?" Iterates the projection at varying spending levels to find the boundary.
+
+**UX shape (rough sketch):**
+- Topbar gains an `Analysis` mode toggle (peer of edit mode).
+- In Analysis mode, the editing affordances disappear; the right panel becomes an analysis selector ("Year detail," "Bracket placement," "Lifetime tax breakdown," etc.).
+- Compare is a sub-mode of Analysis: pick A and B, charts overlay.
+- Exiting Analysis returns to whichever scenario was active for editing.
+
+**Exit criteria:**
+- Build "Plan A: no Roth ladder" and "Plan B: Roth ladder 65–72," see the lifetime-tax delta and terminal net-worth delta in compare.
+- For any year on the chart, drill in and see exactly what cash flowed where and what tax it generated.
+- See bracket placement during a Roth conversion year — and how much room is left to the next bracket cliff.
+- All Phase 2 tests still pass; new tests added for compare math, year-drill-down rendering, and sensitivity ghost behavior.
+
+**Effort:** large. Probably 1–2 weeks. The intra-plan analyses can ship incrementally — year drill-down and bracket placement are highest-leverage and would land first.
 
 ---
 
@@ -193,5 +211,9 @@ These should be considered at every phase but don't have a single completion poi
 ## What this roadmap is *not*
 
 - Not a calendar. No dates, because estimates are aspirational.
-- Not exhaustive. Things will be added as the use cases of Phase 1 surface them.
-- Not a contract. If Phase 4's couples work reveals the schema needs to change, we update DESIGN_NOTES and re-run Phase 2 tests. The roadmap bends; the principles hold.
+- Not exhaustive. Things will be added as actual use surfaces them.
+- Not a contract. If Phase 3's couples work reveals the schema needs to change, we update DESIGN_NOTES and re-run Phase 2 tests. The roadmap bends; the principles hold.
+
+## Roadmap history
+
+- The original Phase 3 was "Multi-scenario + compare" as a standalone step. After Phase 2 closed, we recognized that compare belongs to a larger "analysis" surface that also needs intra-plan tools (sensitivity sliders, year drill-down, bracket placement, RMD impact, lifetime-tax breakdowns). Compare alone would be a narrow feature that gets reworked when those land. So the original Phase 3 was rolled into the new Phase 4 (Analysis), tax/household work was promoted from Phase 4 to Phase 3, and the ordering was flipped to land bracket-aware numbers before the analytical layer that depends on them.

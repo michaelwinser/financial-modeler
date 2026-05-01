@@ -460,12 +460,14 @@ Each UC in this layer asserts that the **resulting `event.actions[i]`** has the 
 
 These will become testable when their corresponding feature ships:
 
-- **Templates / macros** (Phase 4 likely). When a "Roth conversion ladder" template exists as a single user action, the strategy-level UC ("user invokes the template, resulting events match the template's expansion") becomes testable. Until then, see UC15+UC16 for the underlying primitive.
-- **RMD auto-events** (Phase 4). When a `tax_deferred` account at `current_age >= 73` triggers an auto-event, the derivation rule becomes testable as an extension of UC11.
-- **Step-up basis at horizon** (Phase 4). One primitive: at `actor.horizon_age`, taxable assets get `cost_basis = current balance`. UC test will assert on the resulting account state at the horizon year.
-- **Couples / joint scenarios** (Phase 4). Two actors, two SS streams, joint vs separate filing.
-- **Multi-scenario compare** (Phase 3). UC asserting that two named scenarios coexist and a compare view overlays both projections.
-- **Death and inheritance UI** (Phase 4+). Step-up basis primitive lands first; full inheritance modeling comes after.
+- **RMD auto-events** (Phase 3). When a `tax_deferred` account at `current_age >= 73` triggers an auto-event, the derivation rule becomes testable as an extension of UC11.
+- **Step-up basis at horizon** (Phase 3). One primitive: at `actor.horizon_age`, taxable assets get `cost_basis = current balance`. UC test will assert on the resulting account state at the horizon year.
+- **Couples / joint scenarios** (Phase 3). Two actors, two SS streams, joint vs separate filing.
+- **Bracket-based tax math** (Phase 3). Replaces the single effective rate. UCs become testable for "Roth conversion at age X moves you into the Y% bracket" and "FL move at 70 saves $Z lifetime tax measured against real federal+state brackets."
+- **Multi-scenario compare** (Phase 4 — Analysis). UC asserting that two named scenarios coexist and a compare view overlays both projections, with side-by-side or difference cash-flow rendering. Was originally planned as standalone Phase 3; rolled into the broader Analysis phase since intra-plan analyses share the same surface.
+- **Intra-plan analysis** (Phase 4 — Analysis). Year drill-down, bracket placement diagrams, RMD impact, sensitivity sliders, lifetime-tax breakdown, sequence-of-returns stress test. UCs assert on the analysis panel's contents for a given year/scenario.
+- **Templates / macros** (Phase 4 or later). When a "Roth conversion ladder" template exists as a single user action, the strategy-level UC ("user invokes the template, resulting events match the template's expansion") becomes testable. Until then, see UC15+UC16 for the underlying primitive.
+- **Death and inheritance UI** (post-Phase 4). Step-up basis primitive lands in Phase 3; full inheritance modeling comes later.
 
 ---
 
