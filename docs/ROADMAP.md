@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Status:** Phases 0, 0.5, 1, and 2 are complete. The schema, engine, UX patterns, documentation, and test suite are settled. Code lives in `mocks/main-view/`. Production deployment via `Dockerfile` + `docker-compose.yaml` (publishes to GHCR on push). 79 tests at ~3 s; engine.ts at 96.83% coverage.
+> **Status:** Phases 0, 0.5, 1, 2, and 3.0 are complete. The schema, engine, UX patterns, documentation, and test suite are settled; bracket-walking taxes, RMD synthesis, IRMAA, account types, filing status, tax-deductible expenses, and the step-up tracker are all live. Code lives in `mocks/main-view/`. Production deployment via `Dockerfile` + `docker-compose.yaml` (publishes to GHCR on push). 95 tests at ~3 s. **In progress:** Phase 3.5 (real two-actor couples).
 
 ## Phasing principle
 
@@ -119,7 +119,7 @@ Phases 0–2 were the gate; they are now closed. Phase 3 (taxes/household) and P
 
 Split into 3.0 (tax math + RMDs + filing status, single-actor) and 3.5 (real couples). 3.0 is a week; 3.5 is genuinely another week. The split lets testers exercise correct bracket math against real situations long before the couples machinery lands.
 
-### Phase 3.0 — Brackets, RMDs, account types, filing status
+### Phase 3.0 — Brackets, RMDs, account types, filing status ✅ Complete
 
 **Goal:** make the tool correct for the target user persona's primary jobs, *for a single filer or someone modeling MFJ-as-one-actor*.
 
@@ -157,6 +157,8 @@ Split into 3.0 (tax math + RMDs + filing status, single-actor) and 3.5 (real cou
 - All Phase 2 tests still pass (with snapshot updates for the new math, reviewed and intentional).
 
 **Effort:** large. Probably a week.
+
+**Carry-over to a future phase:** the bracket-table editor and IRMAA-tier editor in the jurisdiction inspector were not built — bracket tables are currently edited via the seed file or JSON import. The federal-2025 and CA defaults shipped are sufficient for the canonical use cases; the editor is deferred until Phase 4 (Analysis) when bracket-placement views will give it natural surface area.
 
 ### Phase 3.5 — Real couples (two actors)
 
