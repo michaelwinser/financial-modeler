@@ -47,7 +47,10 @@
       "Bash(chmod:*)",
 
       "Bash(curl -s http://localhost:*)",
-      "Bash(curl -s -o /dev/null:*)"
+      "Bash(curl -s -o /dev/null:*)",
+
+      "Bash(gh issue:*)",
+      "Bash(gh label:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
